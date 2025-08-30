@@ -1,1 +1,3 @@
 Worldspawn Magicelk235™ Copyright 2025© Is a Project That Started At 8th April 2024, Worldspawn's Main Idea Is a Sandbox World-open With a Server Client Online System. Worldspawn Is a Open Source Project Developed In Python Using Pygame And Socket(They Are The Main Packages Ofcourse There Are More)
+
+This(the line before) is the old Worldspawn or now called Worldspawn-game, Worldspawn today is a game engine for 2d games,It based on pygame and other module, The main idea is to create a simple easy to use game engine, you do not need to work for the system, you dont need to worry about image types, removing objects/objects, calculating camera center and display order, everything is customizable and easy to use
