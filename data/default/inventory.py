@@ -1,21 +1,20 @@
-import modifiers
+from data.default import modifiers,events
 
-class inventoryItem:
-	def __init__(self, item, count=1):
+class InventoryItem:
+	def __init__(self, item=None, count=0):
 		self.item = item
 		self.count = count
 
 
-
 	# checks
 	def needsToBeEmpty(self):
-		return self.isEmpty(self) and self.getName != None
+		return self.isEmpty() and self.getItemName() != "none"
 
 	def sameName(self,name):
-		return self.getName() == name
+		return self.getItemName() == name
 
 	def sameItemType(self,item):
-		return self.sameName(item.getName())
+		return self.sameName(item.getItemName())
 
 	def isEmpty(self):
 		return self.getCount() == 0
@@ -23,6 +22,7 @@ class inventoryItem:
 
 
 	# getters
+
 	def getItemName(self):
 		return self.getItem().getName()
 
@@ -65,24 +65,25 @@ class inventoryItem:
 	def copy(self, item):
 		self.item = item.getItem()
 		self.count = item.count
+		
 
-	def move(self,item):
+	def move(self,item,core):
 		self.copy(item)
-		item.clear()
+		item.clear(core)
 
-	def clear(self,game):
-		self.item = game.getItem("None")()
+	def clear(self,core):
+		self.item = core.getItems("none")()
 		self.count = 0
 		
 	def replace(self,item):
 		self.count,item.count = item.count,self.count
 		self.item,item.item = item.item,self.item
 
-	def merge(self,item):
+	def merge(self,item,core):
 		if self.sameItemType(item):
 			if self.canAddCount(item.getCount()):
 				self.addCount(item.getCount())
-				item.remove()
+				item.clear(core)
 			else:
 				item.decCount(self.getMax()-self.getCount())
 				self.setCount(self.getMax())
@@ -95,23 +96,24 @@ class inventoryItem:
 		self.getItem().applyModifiers(object,hand)
 
 	def __eq__(self, other):
-		if isinstance(other,inventoryItem):
+		if isinstance(other,InventoryItem):
 			if other.count == self.count and other.item == self.item:
 				return True
 		return False
 
 class Inventory:
 	def __init__(self,w,h,owner):
-		self.inventory:list[inventoryItem] = [[None for i in range(w)]for j in range(h)]
+		self.inventory:list[list[InventoryItem]] = [[InventoryItem(count=0) for i in range(w)]for j in range(h)]
+		self.copyListInventory:list[InventoryItem] = self.toRawList()
 		self.size = (w,h)
 		self.owner = owner
-		self.clearInventory()
 		self.handPos = (4,4)
+		self.clearInventory()
 
 
 
 	# getters
-	def getItem(self,w,h):
+	def getItem(self,w,h) ->InventoryItem:
 		return self.inventory[h][w]
 
 	def getSize(self):
@@ -124,7 +126,7 @@ class Inventory:
 		return self.size[0]
 
 	def getHandItem(self):
-		return self.getItem(*self.hand)
+		return self.getItem(*self.handPos)
 
 	def getItemByName(self, name):
 		try:
@@ -139,8 +141,8 @@ class Inventory:
 		self.size = size
 		
 	def setH(self,h):
-		self.size = (self.w,h)
 		
+		self.size = (self.w,h)
 	def setW(self,w):
 		self.size = (w,self.h)
 
@@ -149,32 +151,37 @@ class Inventory:
 	# inventory functions
 	def findItem(self, name):
 		for w in range(self.getW()):
-			for h in range(self.getH() - 1, -1, -1):
+			for h in range(self.getH()):
 				if self.getItem(w,h).sameName(name):
 					return [w, h]
 		return None
 
 	def canAddItemAt(self,w,h,item):
-		if self.getItem(w,h).getItemName() != item.getItemName():
+		if not self.getItem(w,h).sameItemType(item):
 			return False
 		return self.getItem(w,h).canAddCount(item.GetCount())
 
+	def addItemByCount(self,item,count):
+		return self.addItem(InventoryItem(item,count))
+
 	def addItem(self, item):
-		for h in range(self.getH() - 1, -1, -1):
+		for h in range(self.getH()):
 			for w in range(self.getW()):
-				if self.getItem(w,h).addCount(item.getCount()):
-					self.applyModifiers()
-					return True
-		for h in range(self.getH() - 1, -1, -1):
+				if self.getItem(w,h).sameItemType(item):
+					if self.getItem(w,h).addCount(item.getCount()):
+						self.applyModifiers()
+						return True
+		for h in range(self.getH()):
 			for w in range(self.getW()):
 				if self.getItem(w,h).isEmpty():
 					self.getItem(w,h).copy(item)
+
 					self.applyModifiers()
 					return True
 		return False
 
 	def removeItemByAmount(self, name, count):
-		for h in range(self.getH() - 1, -1, -1):
+		for h in range(self.getH()):
 			for w in range(self.getW()):
 				if self.getItem(w,h).sameName(name) and self.getItem(w,h).decCount(count):
 					self.applyModifiers()
@@ -182,7 +189,7 @@ class Inventory:
 		return False
 
 	def removeAt(self,w,h):
-		self.getItem(w,h).remove()
+		self.clearItem(w,h)
 		self.applyModifiers()
 
 	def removeItem(self, name):
@@ -196,7 +203,7 @@ class Inventory:
 		return self.getItem(w,h).sameName(name) and (count == -1 or self.getItem(w,h).canDecCount(count))
 
 	def hasItem(self, name, count=-1):
-		for h in range(self.getH() - 1, -1, -1):
+		for h in range(self.getH()):
 			for w in range(self.getW()):
 				if self.hasItemAt(w,h,name,count):
 					return True
@@ -209,33 +216,43 @@ class Inventory:
 		for row in self.inventory:
 			for item in row:
 				if item.needsToBeEmpty():
-					item.remove()
+					item.clear(self.owner.core)
 		self.applyModifiers()
+
+	def clearItem(self,w,h):
+		self.getItem(w,h).clear(self.owner.core)
 
 	def clearInventory(self):
 		for w in range(self.getW()):
 			for h in range(self.getH()):
-				self.getItem(w,h).remove()
+				self.clearItem(w,h)
 		self.applyModifiers()
 
-
-
+	def toRawList(self):
+		itemList = []
+		for row in self.inventory:
+			itemList = itemList + row
+		return itemList
+	
+	def toList(self):
+		return self.copyListInventory
 	# modifiers
 	def applyModifiers(self):
-		self.update()
 		self.owner.resetModifiers()
 		self.getHandItem().applyModifiers(self.owner,True)
-		usedNames = {}
+		usedNames = set()
 		for row in self.inventory:
 			for item in row:
-				if item.getName() not in usedNames:
-					usedNames.add(item.getName())
+				if item.getItemName() not in usedNames:
+					usedNames.add(item.getItemName())
 					item.applyModifiers(self.owner)
 
 
 	# interaction
 	def interact(self,w1,h1,w2,h2):
-		if not self.getItem(w1,h1).merge(self.getItem(w2,h2)):
+		if w1==w2 and h1==h2:
+			return
+		if not self.getItem(w1,h1).merge(self.getItem(w2,h2),self.owner.core):
 			self.getItem(w1,h1).replace(self.getItem(w2,h2))
 
 
@@ -249,18 +266,12 @@ class Inventory:
 		self.owner = other.owner
 		self.handPos =  other.handPos
 
-	# def convertToGrave(self, game):
-	# 	lootable_list = []
-	# 	for row in self.inventory:
-	# 		for items in row:
-	# 			if items.item_data.item_name != None:
-	# 				lootable_list.append(lootable(items.item_data,items.count))
-	# 	if lootable_list != []:
-	# 		default.create_object(game.objects, objects.object(game, self.owner.Rect.Rect.center, self.owner.Rect.dimension, objects.object_data(self.graveTexture, lootable_list)))
-	# 	self.clearInventory()
+	def drop(self,w,h):
+		if not self.getItem(w,h).isEmpty():
+			self.removeAt(w,h)
+			self.apply_modifiers()
 
-	# def drop(self,w,h,game):
-	# 	if self.inventory[y][x].itemData.item_name != None:
-	# 		default.create_object(game.drops, item(game, (self.owner.Rect.Rect.x + 30, self.owner.Rect.Rect.y + 30), self.owner.Rect.dimension, self.inventory[y][x].count, self.inventory[y][x].itemData))
-	# 		self.remove_at(x,y)
-	# 		self.apply_modifiers()
+	def convetToDrops(self):
+		for w in range(self.getW()):
+			for h in range(self.getH()):
+				self.drop(w,h)

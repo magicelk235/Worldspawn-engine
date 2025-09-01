@@ -1,5 +1,6 @@
-import default,events
-class modifier:
+
+from data.default import default,events
+class Modifier:
 	def __init__(self,name,amount,setMode=True,handNeeded=True,chooseBigger=True,percent=False):
 		"""
 		:param name: damage,shield,max_health
@@ -15,7 +16,7 @@ class modifier:
 		self.percent = percent
 
 	def __eq__(self, other):
-		if isinstance(other,modifier):
+		if isinstance(other,Modifier):
 			return self.__hash__() == other.__hash__()
 		return False
 
@@ -35,7 +36,7 @@ class modifier:
 		return hash(tuple(self.__dict__.items()))
 
 	def canBeApllied(self,hand):
-		return self.hand and not hand
+		return self.handNeeded and not hand
 
 	def apply(self,object,hand=False):
 		if self.canBeApllied(hand):
@@ -55,17 +56,17 @@ class modifier:
 					else:
 						default.setAttr(object, self.name, default.getAttr(object, self.name)+self.amount)
 	@staticmethod
-	def applyForList(modifiers,object,rightClicked=False,hand=False):
+	def applyForList(modifiers,object,hand=False):
 		for modifier in modifiers:
-			modifier.apply(object,rightClicked,hand)
+			modifier.apply(object,hand)
 
 class TemporaryModifier:
 	def __init__(self,modifier,cooldown):
 		self.modifier = modifier
 		self.cooldown = cooldown
 
-	def update(self,game):
-		if game.eventHappend(events.timer):
+	def update(self,core):
+		if core.eventHappend(events.timer):
 			self.cooldown -= 1
 			if self.cooldown == 0:
 				return True

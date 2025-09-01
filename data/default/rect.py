@@ -1,18 +1,20 @@
-import pygame,enum,default,displayType,math
+from data.default import default,displayType,sendable
+from dataclasses import dataclass
+from typing import overload
+import pygame,enum,math
 
-class Rect:
-    def __init__(self, rect, dimension,displayType=displayType.DisplayType.topLeft,renderOrder=4):
-        # default rect object
+
+class Rect(sendable.Sendable):
+    def __init__(self, rect, dimension,displayType=displayType.DisplayType.topLeft):
+        self.visible = False
         self.rect:pygame.rect.Rect = rect
-        # dimension
         self.dimension = dimension
-        # used in more animations, from where to display rhe object
         self.displayType = displayType
-        # what order in the "z-axis" the object will display, 4 is normal and calculated by y,the bigger the later
-        self.renderOrder = renderOrder
-        
         self.fracX = 0
         self.fracY = 0
+
+    def toDict(self):
+        return super().toDict(["x","y","w","h","dimension","displayType"])
 
     @staticmethod
     def addPos(pos1,pos2):
@@ -21,98 +23,163 @@ class Rect:
     def subPos(pos1,pos2):
         return pos1[0] - pos2[0],pos1[1]-pos2[1]
 
-    def setByDisplay(self,pos):
-        default.setAttr(self,"rect." + self.displayType, pos)
+    def display(self,displaySurf):
+        if self.visible:
+            self.draw(displaySurf)
 
-    def setW(self, w):
+    def draw(self,displaySurf:pygame.Surface):
+        pygame.draw.rect(displaySurf, (255, 0, 0), self.rect, 2)
+
+    @staticmethod
+    def isPosBetween(mainPos,pos1,pos2):
+        min_bound = (min(pos1[0], pos2[0]), min(pos1[1], pos2[1]))
+        max_bound = (max(pos1[0], pos2[0]), max(pos1[1], pos2[1]))
+        return min_bound[0] <= mainPos[0] <= max_bound[0] and min_bound[1] <= mainPos[1] <= max_bound[1]
+
+    
+
+    @ property
+    def w(self):
+        return self.rect.w
+
+    @ w.setter
+    def w(self, w):
         self.rect.w = w
 
-    def setH(self, h):
+    @ property
+    def h(self):
+        return self.rect.h
+    @ h.setter
+    def h(self, h):
         self.rect.h = h
 
-    def setSize(self,w,h):
-        self.setW(w)
-        self.setH(h)
+    @property
+    def size(self):
+        return self.rect.size
+    @ size.setter
+    def size(self,size):
+        self.w = size[0]
+        self.h = size[1]
 
-    def setAxis(self,x,y):
-        self.setX(x)
-        self.setY(y)
+    @ property
+    def axis(self):
+        return self.x,self.y
+    @ axis.setter
+    def axis(self,axis):
+        self.x = axis[0]
+        self.y = axis[1]
 
-    def setX(self,x):
+    @property
+    def x(self):
+        return self.rect.x
+
+    @x.setter
+    def x(self,x):
         self.rect.x = int(x)
         self.fracX = x-int(x)
         if int(self.fracX) > 1:
             self.rect.x += int(self.fracX)
             self.fracX -= int(self.fracX)
-
-    def setX(self,y):
+    @ property
+    def y(self):
+        return self.rect.y
+    @y.setter
+    def y(self,y):
         self.rect.y = int(y)
-        self.fracX = y-int(y)
-        if int(self.fracX) > 1:
+        self.fracY = y-int(y)
+        if int(self.fracY) > 1:
             self.rect.y += int(self.fracY)
             self.fracY -= int(self.fracY)
-
-    def setDimension(self,dimension):
+    @property
+    def dimension(self):
+        return self.dimension
+    @dimension.setter
+    def dimension(self,dimension):
         self.dimension = dimension
 
-    def getAxis(self):
-        return self.rect.x,self.rect.y
+    @property
+    def pos(self):
+        return *self.axis,self.dimension
+    @pos.setter
+    def pos(self,pos):
+        self.x = pos[0]
+        self.y = pos[1]
+        self.dimension = pos[2]
 
-    def getPos(self):
-        return self.rect.x,self.rect.y,self.dimension
+    def getByDisplay(self,displayType=None) -> tuple[int,int]:
+        displayType = displayType if displayType != None else self.displayType
+        return default.getAttr(self,"rect." + displayType.value)
 
-
-
-    def getByDisplay(self):
-        return default.getAttr(self,"rect." + self.displayType)
-
-    def getSize(self):
-        return self.rect.size
-
-    def getX(self):
-        return self.rect.x
-
-    def getY(self):
-        return self.rect.y
-
-    def copy(self):
+    def copy(self) -> "Rect":
         return Rect(self.rect.copy(), self.dimension)
 
-    def getW(self):
-        return self.rect.w
+    def calculateDistanceX(self,other:"Rect") -> float:
+        return ((other.Rect.centerx+other.fracX - self.rect.centerx+self.fracX) ** 2)**0.5
 
-    def getH(self):
-        return self.rect.h
+    def calculateDistanceY(self,other:"Rect") -> float:
+        return ((other.Rect.centery+other.fracY - self.rect.centery+self.fracY) ** 2)**0.5
 
-    def calculateDistanceX(self,otherRect):
-        return ((otherRect.Rect.centerx+otherRect.fracX - self.rect.centerx+self.fracX) ** 2)**0.5
+    def calculateDistance(self,other:"Rect") -> float:
+        return self.calculateDistanceX(other) + self.calculateDistanceY(other)
 
-    def calculateDistanceY(self,otherRect):
-        return ((otherRect.Rect.centery+otherRect.fracY - self.rect.centery+self.fracY) ** 2)**0.5
-
-    def calculateDistance(self,otherRect):
-        return self.calculateDistanceX(otherRect) + self.calculateDistanceY(otherRect)
-
-    def __eq__(self, other):
+    def __eq__(self, other:"Rect") -> bool:
         if isinstance(other, Rect):
             if self.sameDimension(other):
                 return False
             return self.rect.x == other.rect.x and self.rect.y == other.rect.y and self.rect.w == other.rect.w and self.rect.h == other.rect.h
         return False
 
-    def sameDimension(self,other):
+    def sameDimension(self,other:"Rect") -> bool:
         return self.dimension == other.dimension
 
-    def collideRectIgnoreDimension(self,other):
+    def collideRectIgnoreDimension(self,other:"Rect") -> bool:
         return self.rect.colliderect(other.rect)
 
-    def containsRect(self,other):
+    def containsRect(self,other:"Rect") -> bool:
         return self.sameDimension(other) and self.rect.contains(other)
 
-    def collideRect(self, other,additionalRange=0):
+    def collideRect(self, other:"Rect",additionalRange=0) -> bool:
         return self.sameDimension(other) and self.rect.inflate(additionalRange,additionalRange).colliderect(other.rect)
 
-    
-
-    def collidePoint(self, x, y, dimension):
+    def collidePoint(self, x, y, dimension) -> bool:
         return self.dimension == dimension and self.rect.collidepoint(x,y)
+
+    @ property
+    def center(self):
+        return self.rect.center
+
+    @ center.setter
+    def center(self,center):
+        self.axis = center[0]-self.w//2,center[1]-self.h//2
+
+    @ property
+    def bottomRight(self):
+        return self.rect.bottomright
+    
+    @ bottomRight.setter
+    def bottomRight(self,bottomRight):
+        self.rect.bottomright = bottomRight
+
+    @ property
+    def bottomLeft(self):
+        return self.rect.bottomleft
+    
+    @ bottomLeft.setter
+    def bottomLeft(self,bottomLeft):
+        self.rect.bottomleft = bottomLeft
+
+    @ property
+    def topLeft(self):
+        return self.rect.topleft
+
+    @ topLeft.setter
+    def topLeft(self,topLeft):
+        self.rect.topleft = topLeft
+
+    @ property
+    def topRight(self):
+        return self.rect.topright
+    
+    @ topRight.setter
+    def topRight(self,topRight):
+        self.rect.topright = topRight

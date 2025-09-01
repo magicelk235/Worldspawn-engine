@@ -1,116 +1,219 @@
 import pygame,math
-import sys,idManager
-import events,media.soundLoader,sprite,hitbox,image,enum,rect,displayType,inventory,platform
+from data.default.animation import Animation
+from dataclasses import dataclass,field
+from data.default import events,sprite,hitbox,image,rect,displayType,inventory,default
 
+@dataclass
+class rideData:
+    point:tuple = (0,0)
+    max:int = 1
+    offset:tuple = (0,0)
+
+@dataclass
 class AliveObjectData(sprite.SpriteData):
-    def __init__(self, hitbox,animations,save=[],clientSave=[],maxHealth=1,damage=1,shield=0,speed=1,react=0,visionRadius=200):
-        super().__init__(hitbox,animations,save,clientSave)
-        self.maxHealth = maxHealth
-        self.damage = damage
-        self.sheild = shield
-        self.speed = speed
-        self.react = react
-        self.visionRadius = visionRadius
+    save:list = field(default_factory=list)
+    health:int = 1
+    damage:int = 1
+    shield:int = 1
+    speed:int = 1
+    attackCountDown:int = 1
+    visionRadius:int = 200
+    rideData:"rideData"=field(default_factory=rideData)
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.save+=["rect","objectType"]
+        
 
 class AliveObject(sprite.Sprite):
     eventRegister = events.EventRegister
-
-
+    
     @staticmethod
     def attackEventTemplate(attacker:str,attacked:str,remaining:int):
         return pygame.event.Event(events.EventRegister.getID("attack"),locals())
 
     @staticmethod
-    def healEventTemplate(healed:str,amount:int):
+    def healthChangedEventTemplate(healed:str,currentHealth:int,oldHealth:int):
         return pygame.event.Event(events.EventRegister.getID("attack"),locals())
+    
+    @staticmethod
+    def riderMountEventTemplate(rideID,riderID,remainingSlots):
+        return pygame.event.Event(events.EventRegister.getID("riderMount"))
+    @ staticmethod
+    def riderDismountEventTemplate(rideID,riderID,remainingSlots):
+        return pygame.event.Event(events.EventRegister.getID("riderDismount"))
 
     attackEvent = eventRegister.register("attack",attackEventTemplate)
 
-    healEvent = eventRegister.register("heal",healEventTemplate)
+    healthChangedEvent = eventRegister.register("healthChanged",healthChangedEventTemplate)
 
-    class directionType(enum.Enum):
-        left = False
-        right = True
+    riderMountEvent = eventRegister.register("riderMount",riderMountEventTemplate)
 
-    # object data
-    objectData = AliveObjectData(hitbox.Hitbox(1,1),{"default":Animation(image.ImageData(flipX="@direction")),"walk":Animation(image.ImageData(flipX="@direction")),"damage":Animation(flipX="@direction",imageData=image.ImageData(color=(270,0,0,0)))}) # type: ignore
+    riderDismount = eventRegister.register("riderDismount",riderDismountEventTemplate)
 
-    def __init__(self, game, pos: tuple[3],tag=None, dict=None):
-        super().__init__(game, pos,dict)
+
+    def __init__(self, core, pos: tuple[3],objectData,tag=None,dictData={}):
+        super().__init__(core, pos,objectData)
         self.health = self.objectData.maxHealth
-        self.direction = self.directionType.left
         self.tag = tag
         self.resetModifiers()
         self.temporaryModifiers = []
-        self.allies = []
+        self.allies = set()
         self.attacker = None
         self.target = None
         self.inventory = inventory.Inventory(5,5,self)
+        self.riders:set[str] = set()
+        self.ride = None
+        self.addIdGroup("riders",self.isRider)
+        self.addIdGroup("allies",self.shareID)
+        
+    @ property
+    def target(self):
+        return self._target
+    @ target.setter
+    def target(self,target):
+        self._target = target
+    def hasTarget(self):
+        return self.target is not None
 
-    def searchForAllies(self):
-        for aliveObject in list(self.game.getAliveObjects().values()):
-            if self.shareID(aliveObject):
-                self.allies.append(aliveObject.id)
+    def getDefaultData(self):
+        self.objectData = AliveObjectData(hitbox.Hitbox(1,1),{"default":Animation(image.ImageData(flipX="@directionX")),"walk":Animation(image.ImageData(flipX="@directionX")),"damage":Animation(imageData=image.ImageData(flipX="@directionX",color=(270,0,0,0)))})
 
-    def collideCheck(self,other,inflate) -> bool:
-        return self.collideCheckRect(other.hitbox)
+    def UpdateRidersPos(self):
+        for i in range(len(self.riders)):
+            riderID = self.riders[i]
+            rider:"AliveObject" = self.core.getObject(riderID)
+            rider.pos = self.pos
+            rider.axis += self.objectData.rideData.point
+            for _ in range(i):
+                rider.axis += self.objectData.rideData.offset
 
-    def collideCheckRect(self,rect:rect.Rect,inflate) -> bool:
-        return self.hitbox.collideRect(rect)
+    def getRemainingSlots(self):
+        return len(self.riders)-self.objectData.rideData.max
 
+    def removeRider(self,rider:str):
+        self.riders.remove(rider)
+        self.addEvent(self.riderDismountEventTemplate(self.id,rider,self.getRemainingSlots()))
+        self.UpdateRidersPos()
 
-    def heal(self,amount:int):
-        if self.health+amount > self.maxHealth:
-            amount = self.health+amount-self.maxHealth
-        self.health += amount
-        self.addEvent(self.healEventTemplate(self.id,amount))
-
-    def setX(self,x:int) -> None:
-        super().setX(x)
-        self.visionRect.setX(self.getX())
-
-    def setY(self,y:int) -> None:
-        super().setY(y)
-        self.visionRect.setY(self.getY())
-    
-    def setDimension(self,dimension:str) -> None:
-        super().setDimension(dimension)
-        self.visionRect.setDimension(self.getDimension())
-
-    def shareID(self,other:"AliveObject") -> bool:
-        if self.id == other.tag:
+    def addRider(self,rider: str) -> bool:
+        if not (self.isRider(rider) or self.getRemainingSlots()==0):
+            self.riders.add(rider)
+            self.addEvent(self.riderMountEventTemplate(self.id,rider,self.getRemainingSlots()))
+            self.UpdateRidersPos()
             return True
-        if self.tag == other.id:
-            return True
-        return self.tag == other.tag
+        return False
+
+    def isRider(self,rider: str) -> bool:
+        return rider in self.riders
+
+    def deathCheck(self) -> bool:
+        if self.eventHappened(self.attackEvent):
+            if self.health == 0:
+                self.inventory.convetToDrops()
+                return True
+        return False
+
+    @ property
+    def health(self):
+        return self._health
+    @ health.setter
+    def health(self,health:int):
+        health = max(health,0)
+        health = min(self.maxHealth,health)
+        self.addEvent(self.healthChangedEventTemplate(self.id,health,self.health))
+        self._health = health
+
+    @ sprite.Sprite.x.setter
+    def x(self,x:int) -> None:
+        sprite.Sprite.x.fset(self,x)
+        self.visionRect.center = self.axis
+
+    @ sprite.Sprite.y.setter
+    def y(self,y:int) -> None:
+        sprite.Sprite.y.fset(self,y)
+        self.visionRect.center = self.axis
+
+    @ sprite.Sprite.dimension.setter
+    def dimension(self,dimension:str) -> None:
+        sprite.Sprite.dimension.fset(self,dimension)
+        self.visionRect.dimension = dimension
+
+    def shareID(self,id:str) -> bool:
+        other = self.core.getObject(id)
+        if hasattr(other,"tag"):
+            if self.id == other.tag and self.tag == other.id and self.tag == other.tag:
+                if id not in self.allies:
+                    self.allies.add(id)
+                return True
+        return False
         
 
     def collideVisionCheck(self,other:"AliveObject") -> bool:
         return other.collideCheckRect(self.visionRect)
 
+    @property
+    def maxHealth(self):
+        return self._maxHealth
+    @ maxHealth.setter
+    def maxHealth(self,maxHealth):
+        self._maxHealth = maxHealth
+        self.health = self.health
+    @ property
+    def damage(self):
+        return self._damage
+    @ damage.setter
+    def damage(self,damage):
+        self._damage = damage
+    @property
+    def attackCountDown(self):
+        return self._attackCountDown
+    @ attackCountDown.setter
+    def attackCountDown(self,attackCountDown):
+        self._attackCountDown = attackCountDown
+    @ property
+    def shield(self):
+        return self._shield
+    @ shield.setter
+    def shield(self,shield:float):
+        self._shield = shield
+
+    @ property
+    def visionRadius(self):
+        return self._visionRadius
+
+    @ visionRadius.setter
+    def visionRadius(self,visionRadius:int):
+        self._visionRadius = visionRadius
+        try:
+            self.visionRect.setSize(self.visionRadius,self.visionRadius)
+        except:
+            self.visionRect:rect.Rect = rect.Rect(pygame.rect.Rect(*self.axis,self.visionRadius,self.visionRadius),self.dimension)
+        self.visionRect.rect.center = self.axis
+
     def resetModifiers(self) -> None:
         self.maxHealth: int = self.objectData.maxHealth
-        self.heal(0)
         self.damage: int = self.objectData.damage
+        self.attackCountDown = self.objectData.attackCountDown
         self.shield: float = self.objectData.sheild
         self.speed: int = self.objectData.speed
-        self.range: int = self.objectData.range
-        self.vision:int = self.objectData.vision
-        try:
-            self.visionRect.updateSize(self.vision,self.vision)
-        except:
-            self.visionRect:rect.Rect = rect(pygame.rect.Rect(*self.rect.getAxis(),self.vision,self.vision),self.rect.dimension,displayType.DisplayTypes.center)
+        self.react: int = self.objectData.react
+        self.visionRadius:int = self.objectData.visionRadius
         
     def attack(self, attacked) -> None:
         attacked.applyDamage(self.damage)
-        self.addEvent()
-
+        
     def applyDamage(self, damage, attacker=None) -> None:
         if self.timers.get("damage", None) == None:
             self.timers["damage"] = 0
             self.damageEffectOn()
-        if attacker != None and not self.shareID(attacker):
+        if attacker != None and not self.shareID(attacker,id):
             self.attacker = attacker
             for id in self.allies:
-                self.game.getObject(id).attacker = self.attacker
+                self.core.getObject(id).attacker = self.attacker
         self.health -= round(damage * (1.00 - self.shield))
+        self.addEvent(self.attackEventTemplate(attacker.id,self.id,self.health))
+
+    def update(self) -> bool:
+        super().update()
+        return self.deathCheck()

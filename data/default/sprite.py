@@ -1,265 +1,216 @@
-import runnable,pygame,platform,rect,image,hitbox,events,math,displayType,default
+from data.default.hitbox import Hitbox
+import data.default.displayType
+from data.default import spatial,rect,image,hitbox,events,default,sendable
+from sympy import cos,sin,pi # type: ignore
+from data.default.animation import Animation
+from data import core
+from dataclasses import dataclass,field
+import pygame,enum
 
+@ dataclass
 class SpriteData:
-	def __init__(self, hitbox,animations,save=[],clientSave=[]):
-		self.hitbox = hitbox
-		self.animations = animations
-		self.save=["rect","objectType"]+save
-		self.clientSave=["rect","objectType","currentAnimation"]+clientSave
+    hitbox:Hitbox = field(default_factory=Hitbox(1,1))
+    animations:dict[str:Animation] = field(default_factory=dict)
+    clientData:list = field(default_factory=list)
+    displayByDirectionX:bool = True
+    displayByDirectionY:bool = False
+
+    def __post_init__(self):
+        self.clientData+=["rect","objectType","currentAnimation"]
 
 
-class Sprite(pygame.sprite.Sprite,runnable.Runnable):
-	eventRegister = events.EventRegister
-
-	# event manager
-
-	@staticmethod
-	def moveEventTemplate(objectID):
-		return pygame.event.Event(events.EventRegister.getID("move"),locals())
-
-	@staticmethod
-	def switchAnimationEventTemplate(newAnimation,oldAnimation,objectID):
-		return pygame.event.Event(events.EventRegister.getID("switchAnimation"),locals())
-	
-	moveEvent = eventRegister.register("move",moveEventTemplate) 
-	switchAnimationEvent = eventRegister.register("switchAnimation",switchAnimationEventTemplate)
-	
-
-	# custom classes
-	class Vector:
-		def __init__(self,angle,time,speed=1):
-			self.angle = angle%360
-			self.time = time
-			self.speed = speed
-
-		def getOpposedAngle(self):
-			return self.angle+180
-
-		def decTime(self):
-			self.time -= 0.1
-			return self.time == 0
-
-		def update(self,sprite):
-			sprite.addX(self.speed*math.cos(math.radians(self.angle)))
-			sprite.addY(self.speed*math.sin(math.radians(self.angle)))
-			return self.decTime()
-
-		def mergeOpposeds(self,vectors):
-			other = vectors.get(self.getOpposedAngle())
-			if other != None:
-				if self.speed == other.speed:
-					if self.time > other.time:
-						vectors.pop(other.angle)
-						self.time -= other.time
-					elif self.time < other.time:
-						vectors.pop(self.angle)
-						other.time -= self.time
-					else:
-						vectors.pop(self.angle)
-						vectors.pop(other.angle)
-
-	class Animation:
-		def __init__(self,imageData=image.ImageData(),displayType=displayType.DisplayType.topLeft,renderOrder=4,countDown=-1,weight=1,moveable=True,startFunc=None,endFunc=None):
-			def empty(param):
-				pass
-			self.startFunc = startFunc
-			self.endFunc = endFunc
-			if self.startFunc == None:
-				self.startFunc = empty
-			if self.endFunc == None:
-				self.endFunc = empty
-			self.imageData = imageData
-			self.displayType = displayType
-			self.renderOrder = renderOrder
-			self.countDown = countDown
-			self.weight = weight
-			self.moveable = moveable
-
-		def load(self,sprite):
-			sprite.addCountDown("animation",self.countDown)
-			sprite.moveable = self.moveable
-			sprite.rect.displayType = self.displayType
-			sprite.rect.renderOrder = self.renderOrder
-			sprite.image.setImageData(self.imageData)
-			self.startFunc(sprite)
-
-		def getImageData(self):
-			return self.imageData
-
-		def weightCheck(self,other):
-			return self.weight >= other.weight
+class Sprite(spatial.Spatial,pygame.sprite.Sprite,sendable.Sendable):
+    
+    # event manager
+    @staticmethod
+    def switchAnimationEventTemplate(newAnimation,oldAnimation,objectID):
+        return pygame.event.Event(events.EventRegister.getID("switchAnimation"),locals())
+        
+    
+    switchAnimationEvent = events.EventRegister.register("switchAnimation",switchAnimationEventTemplate)
+    
 
 
-	# object data
-	objectData = SpriteData(hitbox.Hitbox(0, 0, 0, 0),{"default":Animation()})
-	objectType = None
-	
-	def __init__(self, game:platform.Platform, pos: tuple,dictData={}):
-		if self.objectType == None:
-			self.objectType = f"{type(self).__module__}.{type(self).__name__}"
-		pygame.sprite.Sprite.__init__(self,game)
-		runnable.Runnable.__init__(self,game)
-		self.game = game
-		self.visible = True
-		self.image: image.Image = image.Image(self,self.getAnimation().getImageData())
-		size = self.image.get_size()
-		self.vectors = {}
-		self.speed = 1
-		self.moveable = True
-		self.rect = rect.Rect(pygame.rect.Rect(*pos[:2], *size), pos[2])
-		self.hitbox:rect.Rect = self.objectData.hitbox.getRect(pos)
-		self.currentAnimation = "default"
-		self.loadAnimation("default")
-		self.dictManager(dictData)
-		
-	# vectors
-	def addVector(self,angle:int,time:float,speed:int=None) -> None:
-		if speed == None:
-			speed = self.speed
-		vector = self.Vector(angle,time)
-		other = self.vectors.get(angle)
-		if other != None:
-			other.time += vector.time
-		else:
-			self.vectors[vector.angle] = vector
-		vector.mergeOpposeds(self.vectors)
-		
-	def updateVectors(self) -> None:
-		if self.moveable:
-			if self.game.eventHappend(self.timerEvent):
-				for vector in list(self.vectors.values()):
-					if vector.update(self):
-						del self.vectors[vector.angle]
+    # custom classes
+
+    class DirectionX(enum.Enum):
+        left = False
+        right = True
+
+    class DirectionY(enum.Enum):
+        top = False
+        bottom = True
+
+    
+    def __init__(self, core:"core.Core", pos: tuple,objectData=None,dictData={}):
+        if objectData != None:
+            self.objectData = objectData
+        else:
+            self.getDefaultData()
+        spatial.Spatial.__init__(self,core,pos)
+        pygame.sprite.Sprite.__init__(self,core.multiMedia.displayManager)
+        self.directionX:"Sprite.DirectionX" = self.DirectionX.left
+        self.directionY:"Sprite.DirectionY" = self.DirectionY.top
+        self.image: image.Image = image.Image(self,self.getAnimation().getImageData())
+        self.core = core
+        self.visible:bool = True
+        self.speed:int = 1
+        self.moveable:bool = True
+        self.rect:rect.Rect = self.objectData.hitbox.getRect(pos)
+        self.previousAnimation:str = "default"
+        self.currentAnimation:str = "default"
+        self.loadCurrentAnimation()
+        self.dictData = dictData
+    
+    def getDefaultData(self) -> None:
+        self.objectData = SpriteData(hitbox.Hitbox(0, 0, 0, 0),{"default":Animation()})
+
+    def __post_init__(self):
+        self.handleDictData()
+
+    def handleDictData(self):
+        if self.dictData != {}:
+            self.fromDict()
+            
+    def toData(self):
+        return self.toDict(self.objectData.clientData)
+
+    @ property
+    def size(self) -> tuple[int,int]:
+        return self.rect.size()
+
+    @ size.setter
+    def size(self,w,h) -> None:
+        self.objectData.hitbox.changeSize(w,h)
+        self.rect.setSize(w,h)
+        self.objectData.hitbox.updateRect(self.hitbox,self.pos)
+
+    def getDefaultData(self) -> None:
+        self.objectData = SpriteData(hitbox.Hitbox(0, 0, 0, 0),{"default":Animation()})
+
+    def getDirection(self) -> None:
+        change = (0,0)
+        if self.moveable:
+            for vector in self.vectors.values():
+                change = rect.Rect.addPos(change,vector.calculateDelta())
+        if change[0] > 0:
+            self.directionX = self.DirectionX.right
+        elif change[0] < 0:
+            self.directionX = self.DirectionX.left
+        if change[1] < 0:
+            self.directionY = self.DirectionY.top
+        elif change[1] > 0:
+            self.directionY = self.DirectionY.bottom
+
+        if self.objectData.displayByDirectionX:
+            directionX = self.DirectionX(not self.directionX.value).name
+            self.setDisplayTypeEnd(directionX)
+            
+
+        if self.objectData.displayByDirectionY:
+            
+            directionY = self.DirectionY(not self.directionY.value).name
+            self.setDisplayTypeStart(directionY)
+
+    @ property
+    def renderOrder(self) -> int:
+        return self.image.renderOrder
+
+    def setDisplayTypeEnd(self,end) -> None:
+        self.displaytype = self.displayType.setEnd(end)
+
+    def setDisplayTypeStart(self,start) -> None:
+        self.displayType = self.displayType.setStart(start)
 
 
-	# animations
+    def getType(self) -> str:
+        return self.__module__.split(".")[0]
 
-	def getAnimation(self,name:str="default") -> "Sprite.Animation":
-		return self.objectData.animations[name]
 
-	def loadCurrentAnimation(self) -> None:
-		animation = self.getAnimation(self.currentAnimation)
-		animation.load(self)
-		
-	def loadAnimation(self,name:str="default") -> None:
-		self.addEvent(self.switchAnimationEventTemplate(name,self.currentAnimation,self.id))
-		self.currentAnimation = name
-		self.loadCurrentAnimation(self)
+    # animations
 
-	def getCurrentAnimation(self) -> "Sprite.Animation":
-		return self.getAnimation(self.currentAnimation)
+    def getAnimation(self,name:str="default") -> Animation:
+        return self.objectData.animations.get(name,self.objectData.animations["default"])
 
-	def updateAnimations(self) -> None:
-		if self.game.eventHappend(self.timerEvent).self.countDownEnded("animation"):
-			self.getCurrentAnimation().endFunc(self)
-			self.loadAnimation()
+    def loadCurrentAnimation(self) -> None:
+        animation = self.getAnimation(self.currentAnimation)
+        animation.unload(self,self.getAnimation(self.currentAnimation))
+        animation.load(self)
+        
+    def loadAnimation(self,name:str="default") -> None:
+        if self.currentAnimation != name:
+            self.getCurrentAnimation().unLoad(self)
+            self.addEvent(self.switchAnimationEventTemplate(name,self.currentAnimation,self.id))
+            self.currentAnimation = name
+            self.loadCurrentAnimation()
 
-	def setAnimation(self,name) -> None:
-		if self.getAnimation(name).weightCheck(self.getCurrentAnimation()):
-			self.loadAnimation(name)
-			
-	def setUnvisible(self) -> None:
-		self.visible = False
+    def getCurrentAnimation(self) -> Animation:
+        return self.getAnimation(self.currentAnimation)
 
-	def setVisible(self) -> None:
-		self.visible = True
+    def updateAnimations(self) -> None:
+        if self.core.eventHappened(self.timerEvent) and self.countDownEnded("animation"):
+            self.getCurrentAnimation().endFunc()
+            self.loadAnimation()
 
-	def switchVisible(self) -> None:
-		self.visible = not self.visible
+    def setAnimation(self,name,add=True) -> None:
+        if add and name == self.currentAnimation:
+            self.countDowns["animation"] += 0.02
+        if self.getAnimation(name).weightCheck(self.getCurrentAnimation()):
+            self.loadAnimation(name)
+        
+    def hide(self) -> None:
+        self.visible = False
 
-	def isVisible(self) -> bool:
-		return self.visible
+    def show(self) -> None:
+        self.visible = True
 
-	def display(self,displaySurf,player,displayOffset) -> None:
-		if self.isVisible():
-			self.displayImage(displaySurf,player,displayOffset)
+    def toggleVisibility(self) -> None:
+        self.visible = not self.visible
 
-	def displayImage(self,displaySurf:pygame,player,displayOffset) -> None:
-		offset = self.rect.subPos(self.rect.subPos(self.getAxis(),self.image.getAlignmentOffset(self.getDisplayType)),self.rect.subPos(self.getAxis(),self.rect.getByDisplay())) - displayOffset
-		self.image.display(displaySurf,offset)
+    def isVisible(self) -> bool:
+        return self.visible
 
-	# rect/pos
-		
-	def setX(self,x:int) -> None:
-		self.rect.setX(x)
-		self.objectData.hitbox.updateRect(self.hitbox, self.rect)
-		self.addEvent(self.moveEventTemplate(self.id))
+    def calculatePosByDisplayType(self) -> tuple[int,int]:
+        displayedPos = self.displayType.calculatePosByDisplayType(self.image,self.hitbox,self.getAxis())
+        return displayedPos
 
-	def setY(self,y:int) -> None:
-		self.rect.setY(y)
-		self.objectData.hitbox.updateRect(self.hitbox, self.rect)
-		self.addEvent(self.moveEventTemplate(self.id))
-		
-	def addX(self,x) -> None:
-		self.setX(self.getX()+x)
-		
-	def addY(self,y) -> None:
-		self.setY(self.getY()+y)
+    def canDisplay(self,displaySurf,player,displayOffset) -> bool:
+        return self.isVisible()
 
-	def collideCheck(self,other,additionalRange:int=0) -> bool:
-		return self.collideCheckRect(other.hitbox,additionalRange)
-	
-	def collideCheckRect(self,rect:rect.Rect,additionalRange:int=0) -> bool:
-		return self.hitbox.collideRect(rect,additionalRange)
+    def display(self,displaySurf,player,displayOffset) -> None:
+        if self.canDisplay():
+            self.displayImage(displaySurf,player,displayOffset)
 
-	def setPos(self,pos:tuple) -> None:
-		self.setX(pos[0])
-		self.setY(pos[1])
-		self.setDimension(pos[2])
-		
-	def setDimension(self,dimension:str) -> None:
-		self.rect.dimension = dimension
-		self.hitbox.dimension = dimension
-		self.addEvent(self.moveEventTemplate(self.id))
+    def displayImage(self,displaySurf,player,displayOffset) -> None:
+        self.getDirection()
+        
+        offset = self.calculatePosByDisplayType() - displayOffset
+        self.image.display(displaySurf,offset)
+        self.rect.display(displaySurf)
 
-	def getX(self) -> int:
-		return self.rect.rect.x
-		
-	def getY(self) -> int:
-		return self.rect.rect.y
+    # rect
 
-	def getPos(self) -> tuple:
-		x,y = self.getAxis()
-		return x,y,self.getDimension()
-		
-	def getAxis(self) -> tuple:
-		return self.getX(),self.getY()
+    def collideCheck(self,other:"Sprite",additionalRange:int=0) -> bool:
+        return self.collideCheckRect(other.rect,additionalRange)
+        
+    def collideCheckIgnoreDimensions(self,other:"Sprite"):
+        return self.rect.collideRectIgnoreDimension(other.rect)
+        
+    def collideCheckRect(self,rect:rect.Rect,additionalRange:int=0) -> bool:
+        return self.rect.collideRect(rect,additionalRange)
+        
+    @ property
+    def displayType(self) -> data.default.displayType.DisplayType:
+        return self.rect.displayType
 
-	def getDisplayType(self) -> displayType.DisplayType:
-		return self.rect.displayType
+    @ displayType.setter
+    def displayType(self,displayType:data.default.displayType.DisplayType):
+        self.rect.displayType = displayType
 
-	def getDimension(self) -> str:
-		return self.rect.dimension
+    # update/main
 
-	# update/main
-
-	def update(self) -> bool:
-		self.updateTimers()
-		self.updateVectors()
-		return False
-		
-
-	# save/load/client
-
-	def dictManager(self,data:dict[str,any]) -> None:
-		if data != None:
-			self.fromDict(data)
-		
-	def toDict(self) -> dict[str,any]:
-		saveDict = {}
-		for name in self.objectData.save:
-			saveDict[name] = default.getAttr(self,name)
-		return saveDict
-			
-	def toDictToClient(self) -> dict[str,any]:
-		saveDict = {}
-		for name in self.objectData.clientSave:
-			saveDict[name] = default.getAttr(self,name)
-		return saveDict
-	
-	def fromDict(self,data:dict[str,any]) -> None:
-		for key in list(data.keys()):
-			if key == "imageData":
-				self.image.fromDict(data["imageData"])
-			else:
-				default.setAttr(self, key, data[key])
+    def update(self) -> bool:
+        super().update()
+        self.updateAnimations()
+        self.updateVectors()
+        return False

@@ -1,18 +1,19 @@
-import runnable,pygame,sys,events,media.soundLoader
+from data.default import runnable,events
+from data.media import soundLoader
+import pygame
 class Sound(runnable.Runnable):
-
-	soundEndedEvent = eventRegister.register("soundEnded",None)
+	soundEndedEvent = events.EventRegister.register("soundEnded",None)
 
 
 	_channel_to_source = {}
-	def __init__(self,game, soundPath, pos, loops=1, followID=None, maxHearDistance=300):
-		super().__init__(game)
-		self.loop = loop
+	def __init__(self,core, soundPath, pos, loops=1, followID=None, maxHearDistance=300):
+		super().__init__(core)
+		self.loops = loops
 		self.pos = pos
 		self.maxHearDistance = maxHearDistance
 		self.followID = followID
 
-		self.sound = pygame.mixer.Sound(media.soundLoader.getSound(soundPath))
+		self.sound = pygame.mixer.Sound(soundLoader.getSound(soundPath))
 		self.channel = pygame.mixer.find_channel()
 		
 		self.channel.play(self.sound, loops=loops)
@@ -21,9 +22,9 @@ class Sound(runnable.Runnable):
 
 	def updatePos(self):
 		if self.followID:
-			if self.game.objectExist(self.followID):
-				if self.game.getObjectByID(self.followID).eventHappend(events.EventRegister.getID("move")):
-					self.pos = self.game.getObjectByID(self.followID).getAxis()
+			if self.core.objectExist(self.followID):
+				if self.core.getObjectByID(self.followID).eventHappend(events.EventRegister.getID("move")):
+					self.pos = self.core.getObjectByID(self.followID).getAxis()
 			else:
 				self.followID = None
 
