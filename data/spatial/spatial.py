@@ -1,8 +1,8 @@
 import pygame
 from dataclasses import dataclass
-from data.default import events
-from data.default.runnable import Runnable
-from data.default.rect import Rect
+from data.core import events
+
+from data.common.runnable import Runnable
 from sympy import cos,sin,pi
 class Spatial(Runnable):
 

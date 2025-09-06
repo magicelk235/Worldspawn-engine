@@ -1,8 +1,8 @@
 import pygame
-from data.default import fileManager
+from data.managers import fileManager
 from data.media import loader
 from PIL import Image
-def loadImage(path):
+def loadTexture(path):
     if ".png" in path:
         return [[pygame.image.load(path),1]]
     elif ".gif" in path:
@@ -21,7 +21,7 @@ validExtensions = {".png", ".gif"}
 global images
 images = {}
 for package in fileManager.getFolders("data/packages",True):
-    loader.load(f"{package}/assets/images",validExtensions,images,loadImage)
+    loader.load(f"{package}/assets/textures",validExtensions,images,loadTexture)
 
 def updateImage(path):
     image = images.get(path,images[defaultPath])

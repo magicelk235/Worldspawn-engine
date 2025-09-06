@@ -1,6 +1,5 @@
 import os
 
-
 def load(path,validExtensions,mediaDict,mediaLoadFunction):
     for dirpath, __, filenames in os.walk(path):
         for filename in filenames:

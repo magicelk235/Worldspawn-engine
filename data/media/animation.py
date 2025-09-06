@@ -1,4 +1,4 @@
-from data.default import image
+from data.media import image
 from data.default.displayType import DisplayType
 from dataclasses import dataclass
 from typing import Callable

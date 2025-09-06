@@ -1,5 +1,5 @@
 import pygame
-from data.default.events import EventManager
+from data.events import EventManager
 class InputManager(EventManager):
     def __init__(self):
         super().__init__()

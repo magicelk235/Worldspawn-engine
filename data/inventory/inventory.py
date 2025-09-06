@@ -1,5 +1,3 @@
-from data.default import modifiers,events
-
 class InventoryItem:
 	def __init__(self, item=None, count=0):
 		self.item = item

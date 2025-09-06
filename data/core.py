@@ -1,8 +1,11 @@
 # import aliveObject,default,displayType,events,hitbox,idManager,image,inventory,modifiers,multiMedia,rect,runnable,sound,sprite,timer,uiObject
 import pygame,yaml,socket,pickle,enum,struct,types
-pygame.init()
 
-from data.default import multiMedia,events,idManager,inputManager,aliveObject,fileManager
+from data import events
+from data.media import mediaManager
+pygame.init()
+from data.managers import idManager,inputManager,fileManager
+from data.sprites import aliveObject
 
 class Api:
     
@@ -99,7 +102,7 @@ class Core(Api,events.EventManager,idManager.IDManager):
 
     def __init__(self):
         self.sprites = {}
-        self.multiMedia = multiMedia.MultiMedia(self)
+        self.multiMedia = mediaManager.MultiMedia(self)
         # importlib.reload(imageLoader)
         
         events.EventManager.__init__(self)

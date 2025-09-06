@@ -1,6 +1,6 @@
 import pygame
-from data.default import fileManager
-from data.media import loader
+from data.managers import fileManager
+from data.media.loaders import loader
 def loadFont(path):
     return pygame.font.Font(path,16)
 defaultFont = pygame.font.Font(None,16)

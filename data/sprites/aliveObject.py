@@ -1,7 +1,9 @@
 import pygame,math
-from data.default.animation import Animation
+from data.media.animation import Animation
 from dataclasses import dataclass,field
-from data.default import events,sprite,hitbox,image,rect,displayType,inventory,default
+from data.default import sprite,hitbox,rect,displayType,inventory,default
+from data.core import events
+from data.media import image
 
 @dataclass
 class rideData:

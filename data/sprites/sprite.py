@@ -1,11 +1,14 @@
-from data.default.hitbox import Hitbox
+from data.core import events
+from data.spatial.hitbox import Hitbox
 import data.default.displayType
-from data.default import spatial,rect,image,hitbox,events,default,sendable
+from data.default import spatial,rect,hitbox,default,sendable
 from sympy import cos,sin,pi # type: ignore
-from data.default.animation import Animation
+from data.media.animation import Animation
 from data import core
 from dataclasses import dataclass,field
 import pygame,enum
+
+from data.media import image
 
 @ dataclass
 class SpriteData:
@@ -16,7 +19,7 @@ class SpriteData:
     displayByDirectionY:bool = False
 
     def __post_init__(self):
-        self.clientData+=["rect","objectType","currentAnimation"]
+        self.clientData=["rect","objectType","currentAnimation"]+self.clientData
 
 
 class Sprite(spatial.Spatial,pygame.sprite.Sprite,sendable.Sendable):

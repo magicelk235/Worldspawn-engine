@@ -1,6 +1,6 @@
-from data.default import fileManager
-from data.media import loader
-import pygame,os
+from data.managers import fileManager
+from data.media.loaders import loader
+import pygame
 def loadSound(path):
     return pygame.mixer.Sound(path)
 
