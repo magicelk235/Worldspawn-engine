@@ -1,5 +1,7 @@
 import random
-from data.default import aliveObject,rect,inventory
+from data.inventory import inventory
+from data.spatial import rect
+from data.sprites import aliveObject
 from dataclasses import dataclass
 
 @ dataclass
@@ -33,8 +35,8 @@ class Spawner:
 		self.setName = "spawnedObjects"+str(self.index)
 
 	def npcObjectInit(self,npcObject:"NpcObject"):
-		if not npcObject.isCountDown(self.countDownName):
-			npcObject.addCountDown(self.countDownName,self.countDown)
+		if not npcObject.isTimer(self.countDownName):
+			npcObject.addTimer(self.countDownName,self.countDown,True)
 			setattr(npcObject,self.setName,set())
 			npcObject.addIdGroup(self.setName,lambda x,y:y in getattr(x,self.setName))
 
@@ -42,7 +44,7 @@ class Spawner:
 		return len(getattr(npcObject,self.setName))
 
 	def canSpawn(self,npcObject:"NpcObject"):
-		return npcObject.countDownEnded(self.countDownName,self.countDown) and (not self.needsTarget or npcObject.hasTarget()) and self.getSpawnedCount(npcObject) < self.max
+		return npcObject.timerEnded(self.countDownName) and (not self.needsTarget or npcObject.hasTarget()) and self.getSpawnedCount(npcObject) < self.max
 
 	def update(self,npcObject:"NpcObject"):
 		self.npcObjectInit(npcObject)
@@ -52,9 +54,9 @@ class Spawner:
 				self.generateObject(npcObject)
 
 	def generateObject(self,npcObject:"NpcObject"):
-		path = self.choiceObject()
-		pos = self.generatePos(npcObject.getPos())
-		id = npcObject.core.getObjectByPath(path)(core=npcObject.core,pos=pos,tag=npcObject.id,**self.initData)
+		prefabPath = self.choiceObject()
+		pos = self.generatePos(npcObject.pos)
+		id = npcObject.core.getObjectByPrefabPath(prefabPath)(core=npcObject.core,pos=pos,tag=npcObject.id,**self.initData)
 		getattr(npcObject,self.setName).add(id)
 		if self.needsTarget:
 			npcObject.core.getObject(id).target = npcObject.target
@@ -66,7 +68,7 @@ class Spawner:
 		return rect.Rect.addPos(center[:2],(x,y))+(center[2],)
 	
 	def choiceObject(self):
-		return random.choice(self.objectList)
+		return random.choice(self.options)
 
 
 @ dataclass
@@ -75,7 +77,7 @@ class NpcObjectData(aliveObject.AliveObjectData):
 	spawners:list = []
 
 class NpcObject(aliveObject.AliveObject):
-	def __init__(self, core, pos: tuple[3],objectData,tag=None,dictData={}):
+	def __init__(self, core, pos: tuple[int,int,str],objectData,tag=None,dictData={}):
 		super().__init__(core, pos, objectData, tag, dictData)
 		for lootable in self.objectData.lootableList:
 			lootable.generateItem(self.inventory,self.core)

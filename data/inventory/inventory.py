@@ -267,9 +267,9 @@ class Inventory:
 	def drop(self,w,h):
 		if not self.getItem(w,h).isEmpty():
 			self.removeAt(w,h)
-			self.apply_modifiers()
+			self.applyModifiers()
 
-	def convetToDrops(self):
+	def convertToDrops(self):
 		for w in range(self.getW()):
 			for h in range(self.getH()):
 				self.drop(w,h)

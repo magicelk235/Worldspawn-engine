@@ -1,3 +1,4 @@
+
 from data.managers import idManager
 from data.media import sound
 import pygame
@@ -45,7 +46,7 @@ class DisplayManager(pygame.sprite.Group):
 			sprite.display(self.displaySurface,player,playerOffset)
 		pygame.display.update()
 
-class AudioManager(idManager.IDManager):
+class AvManager(idManager.IDManager):
 	def __init__(self,core):
 		self.core = core
 		self.activeSources = {}

@@ -1,7 +1,9 @@
 import pygame,math
 from data.media.animation import Animation
 from dataclasses import dataclass,field
-from data.default import sprite,hitbox,rect,displayType,inventory,default
+from data.spatial import rect,hitbox
+from data.sprites import sprite
+from data.inventory import inventory
 from data.core import events
 from data.media import image
 
@@ -18,6 +20,7 @@ class AliveObjectData(sprite.SpriteData):
     damage:int = 1
     shield:int = 1
     speed:int = 1
+    react:int = 1
     attackCountDown:int = 1
     visionRadius:int = 200
     rideData:"rideData"=field(default_factory=rideData)
@@ -54,11 +57,12 @@ class AliveObject(sprite.Sprite):
     riderDismount = eventRegister.register("riderDismount",riderDismountEventTemplate)
 
 
-    def __init__(self, core, pos: tuple[3],objectData,tag=None,dictData={}):
+    def __init__(self, core, pos: tuple[int,int,str],objectData,tag=None,dictData={}):
         super().__init__(core, pos,objectData)
-        self.health = self.objectData.maxHealth
-        self.tag = tag
         self.resetModifiers()
+        self.health = self.objectData.health
+        self.tag = tag
+
         self.temporaryModifiers = []
         self.allies = set()
         self.attacker = None
@@ -194,10 +198,10 @@ class AliveObject(sprite.Sprite):
         self.visionRect.rect.center = self.axis
 
     def resetModifiers(self) -> None:
-        self.maxHealth: int = self.objectData.maxHealth
+        self.maxHealth: int = self.objectData.health
         self.damage: int = self.objectData.damage
         self.attackCountDown = self.objectData.attackCountDown
-        self.shield: float = self.objectData.sheild
+        self.shield: float = self.objectData.shield
         self.speed: int = self.objectData.speed
         self.react: int = self.objectData.react
         self.visionRadius:int = self.objectData.visionRadius
@@ -208,8 +212,7 @@ class AliveObject(sprite.Sprite):
     def applyDamage(self, damage, attacker=None) -> None:
         if self.timers.get("damage", None) == None:
             self.timers["damage"] = 0
-            self.damageEffectOn()
-        if attacker != None and not self.shareID(attacker,id):
+        if attacker != None and not self.shareID(attacker,self.id):
             self.attacker = attacker
             for id in self.allies:
                 self.core.getObject(id).attacker = self.attacker

@@ -1,6 +1,6 @@
 from data.common import runnable
 from data.core import events
-from data.media import soundLoader
+from data.media.loaders import soundLoader
 import pygame
 class Sound(runnable.Runnable):
 	soundEndedEvent = events.EventRegister.register("soundEnded",None)
@@ -31,7 +31,7 @@ class Sound(runnable.Runnable):
 
 	def update(self, player):
 		self.updatePos()
-		delta = player.getAxis() - self.pos
+		delta = player.axis - self.pos
 		dist = delta.length()
 		volume = max(0.0, min(1.0, 1 - dist/self.max_hear))
 		pan = max(-1.0, min(1.0, delta.x/self.max_hear))

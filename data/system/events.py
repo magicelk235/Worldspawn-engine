@@ -1,4 +1,4 @@
-import pygame
+from pygame import event,USEREVENT
 
 class RegisteredEvent():
     def __init__(self,id,createFunction):
@@ -16,7 +16,7 @@ class RegisteredEvent():
         return self.createFunction
 
 class EventRegister:
-    nextID = pygame.USEREVENT
+    nextID = USEREVENT
     registeredEvents = {}
 
     @classmethod
@@ -50,7 +50,7 @@ class EventManager:
         else:
             return EventRegister.getID(id)
 
-    def addEvent(self,event:pygame.event.Event) -> None:
+    def addEvent(self,event:event.Event) -> None:
         eventID = event.type
         eventList = self.nextEvents.get(eventID,[])
         eventList.append(event)
@@ -67,7 +67,7 @@ class EventManager:
     def clearEvents(self) -> None:
         self.currentEvents,self.nextEvents = self.nextEvents,{}
         
-    def getEventList(self,eventID:int|str) -> list[pygame.event.Event]:
+    def getEventList(self,eventID:int|str) -> list[event.Event]:
         eventID = self.getID(eventID)
         return self.currentEvents.get(eventID,[])
 

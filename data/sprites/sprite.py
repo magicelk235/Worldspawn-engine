@@ -1,7 +1,8 @@
 from data.core import events
 from data.spatial.hitbox import Hitbox
-import data.default.displayType
-from data.default import spatial,rect,hitbox,default,sendable
+
+from data.spatial import hitbox,spatial,rect
+from data.common import sendable
 from sympy import cos,sin,pi # type: ignore
 from data.media.animation import Animation
 from data import core
@@ -45,13 +46,13 @@ class Sprite(spatial.Spatial,pygame.sprite.Sprite,sendable.Sendable):
         bottom = True
 
     
-    def __init__(self, core:"core.Core", pos: tuple,objectData=None,dictData={}):
+    def __init__(self, core:"core.Core", pos: tuple[int,int,str],objectData=None,dictData={}):
         if objectData != None:
             self.objectData = objectData
         else:
             self.getDefaultData()
         spatial.Spatial.__init__(self,core,pos)
-        pygame.sprite.Sprite.__init__(self,core.multiMedia.displayManager)
+        pygame.sprite.Sprite.__init__(self,core.mediaManager.displayManager)
         self.directionX:"Sprite.DirectionX" = self.DirectionX.left
         self.directionY:"Sprite.DirectionY" = self.DirectionY.top
         self.image: image.Image = image.Image(self,self.getAnimation().getImageData())
@@ -83,13 +84,10 @@ class Sprite(spatial.Spatial,pygame.sprite.Sprite,sendable.Sendable):
         return self.rect.size()
 
     @ size.setter
-    def size(self,w,h) -> None:
-        self.objectData.hitbox.changeSize(w,h)
-        self.rect.setSize(w,h)
-        self.objectData.hitbox.updateRect(self.hitbox,self.pos)
-
-    def getDefaultData(self) -> None:
-        self.objectData = SpriteData(hitbox.Hitbox(0, 0, 0, 0),{"default":Animation()})
+    def size(self,size) -> None:
+        self.objectData.hitbox.changeSize(*size)
+        self.rect.setSize(*size)
+        self.objectData.hitbox.updateRect(self.rect,self.pos)
 
     def getDirection(self) -> None:
         change = (0,0)
@@ -142,7 +140,7 @@ class Sprite(spatial.Spatial,pygame.sprite.Sprite,sendable.Sendable):
         
     def loadAnimation(self,name:str="default") -> None:
         if self.currentAnimation != name:
-            self.getCurrentAnimation().unLoad(self)
+            self.getCurrentAnimation().unload(self)
             self.addEvent(self.switchAnimationEventTemplate(name,self.currentAnimation,self.id))
             self.currentAnimation = name
             self.loadCurrentAnimation()
@@ -151,13 +149,13 @@ class Sprite(spatial.Spatial,pygame.sprite.Sprite,sendable.Sendable):
         return self.getAnimation(self.currentAnimation)
 
     def updateAnimations(self) -> None:
-        if self.core.eventHappened(self.timerEvent) and self.countDownEnded("animation"):
+        if self.core.eventHappened(self.timerEvent) and self.timerEnded("animation"):
             self.getCurrentAnimation().endFunc()
             self.loadAnimation()
 
     def setAnimation(self,name,add=True) -> None:
         if add and name == self.currentAnimation:
-            self.countDowns["animation"] += 0.02
+            self.extendTimer()
         if self.getAnimation(name).weightCheck(self.getCurrentAnimation()):
             self.loadAnimation(name)
         
@@ -174,7 +172,7 @@ class Sprite(spatial.Spatial,pygame.sprite.Sprite,sendable.Sendable):
         return self.visible
 
     def calculatePosByDisplayType(self) -> tuple[int,int]:
-        displayedPos = self.displayType.calculatePosByDisplayType(self.image,self.hitbox,self.getAxis())
+        displayedPos = self.displayType.calculatePosByDisplayType(self.image,self.rect,self.axis)
         return displayedPos
 
     def canDisplay(self,displaySurf,player,displayOffset) -> bool:
@@ -203,11 +201,11 @@ class Sprite(spatial.Spatial,pygame.sprite.Sprite,sendable.Sendable):
         return self.rect.collideRect(rect,additionalRange)
         
     @ property
-    def displayType(self) -> data.default.displayType.DisplayType:
+    def displayType(self) -> rect.DisplayType:
         return self.rect.displayType
 
     @ displayType.setter
-    def displayType(self,displayType:data.default.displayType.DisplayType):
+    def displayType(self,displayType:rect.DisplayType):
         self.rect.displayType = displayType
 
     # update/main

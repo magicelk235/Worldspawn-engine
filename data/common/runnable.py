@@ -1,16 +1,52 @@
+from pathlib import Path
+from sys import modules
 from data.core import events
+from data.common.attributeAccessor import AttributeAccessor
 from data.managers.timeManager import TimeManager
-class Runnable(TimeManager,events.EventManager):
+
+class Runnable(TimeManager,events.EventManager,AttributeAccessor):
     eventRegister = events.EventRegister
-    
+
+    def getModel(self,start=0,end:int|None=None):
+        path = self.__class__.__module__.split(".")
+        path = path[start:end]
+        return "/".join(path)
+
+
+    @ property
+    def name(self):
+        return str(self.__class__.name)
+    @ property
+    def domain(self):
+        return self.getModel(2,3)
+    @ property
+    def prefab(self):
+        return self.getModel(3,4)
+    @ property
+    def module(self):
+        return self.domain + self.prefab + self.name
+
+    @ property
+    def prefabPath(self):
+        return self.prefab+self.name
+
     def __init__(self,core):
-        TimeManager.Timer.__init__(self,core)
+        TimeManager.__init__(self,core)
         events.EventManager.__init__(self)
         self.core = core
-        self.updateable = True
+        self.updatable = True
         self.id = None
-        self.idGroups:dict[str,function] = {}
-    
+        self.idGroups:dict[str,callable] = {}
+
+    @ property
+    def updatable(self):
+        return self._updatable
+    @ updatable.setter
+    def updatable(self,value):
+        self._updatable = value
+
+
+
     def updateIdGroups(self):
         if self.core.eventHappened(self.eventRegister.getID("objectCreated")):
             for event in self.core.getEventList(self.eventRegister.getID("objectCreated")):
@@ -31,17 +67,17 @@ class Runnable(TimeManager,events.EventManager):
 
     @ property
     def id(self):
-        return self.id
+        return self._id
 
     @ id.setter
     def id(self,id:str):
-        self.id = id
+        self._id = id
     
     def main(self):
-        if self.updateable:
+        if self.updatable:
             return self.update()
 
-    def get(self,value:str|any):
+    def get(self,value):
         if isinstance(value,str):
             if value.startswith("@"):
                 return getattr(self,value[1:])
@@ -49,17 +85,3 @@ class Runnable(TimeManager,events.EventManager):
 
     def update(self):
         self.updateIdGroups()
-
-    def setAttr(self, path, value):
-        attributes = path.split(".")
-        obj = self
-        for attr in attributes[:-1]:
-            obj = getattr(obj, attr)
-        setattr(obj, attributes[-1], value)
-
-    def getAttr(self, path):
-        attributes = path.split(".")
-        obj = self
-        for attr in attributes:
-            obj = getattr(obj, attr)
-        return obj
