@@ -1,9 +1,8 @@
 from data.common.attributeAccessor import AttributeAccessor
 from data.spatial.rect import DisplayType
-from data.media.loaders import textureLoader,fontLoader
+from data.buffers.assetsLoader import AssetsLoader
 from dataclasses import dataclass
 import pygame,gif_pygame
-
 @ dataclass(frozen=True)
 class ImageData(AttributeAccessor):
 	path:str = None
@@ -37,7 +36,7 @@ class ImageData(AttributeAccessor):
 class Image(AttributeAccessor):
 	def __init__(self,sprite,imageData):
 		self.sprite = sprite
-		self.path = textureLoader.defaultPath
+		self.path = ""
 		self.scaleSize = None
 		self.cutSize = None
 		self.flipX = False
@@ -48,7 +47,7 @@ class Image(AttributeAccessor):
 		self.factoredSize = 1
 		self.text = None
 		self.textMode = False
-		self.image = gif_pygame.GIFPygame(textureLoader.getImage(""))
+		self.image = gif_pygame.GIFPygame(AssetsLoader.get("textures",self.path))
 		self.imageData = imageData
 		self.oldPath = None
 		self._cache = {}
@@ -76,7 +75,7 @@ class Image(AttributeAccessor):
 			self.textMode = True
 		if self.image and not self.imageData.resetGif:
 			frame = self.image.frame
-			frame_time = self.image.frame_time
+			frame_time = self.image._frame_time
 
 		self.createGif()
 
@@ -85,7 +84,7 @@ class Image(AttributeAccessor):
 		else:
 			self.image.frame = frame
 
-		self.image.frame_time = frame_time
+		self.image._frame_time = frame_time
 		if self.cutSize == -1:
 			self.cutSize = self.image.get_size()
 		if self.scaleSize == -1:
@@ -99,11 +98,11 @@ class Image(AttributeAccessor):
 
 	def getImageFrames(self):
 		if self.textMode:
-			font = fontLoader.getFont(self.path)
+			font = AssetsLoader.get("fonts",self.path)
 			image = font.render(str(self.text), font,(255,255,255))
 			return [[image,1]]
 		else:
-			return textureLoader.getImage(self.path)
+			return AssetsLoader.get("textures",self.path)
 	
 	def getImageFrame(self):
 		return self.getImageFrames()[self.image.frame][0]

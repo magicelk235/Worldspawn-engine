@@ -131,10 +131,10 @@ class Rect(sendable.Sendable):
             self.fracY -= int(self.fracY)
     @property
     def dimension(self):
-        return self.dimension
+        return self._dimension
     @dimension.setter
     def dimension(self,dimension):
-        self.dimension = dimension
+        self._dimension = dimension
 
     @property
     def pos(self):

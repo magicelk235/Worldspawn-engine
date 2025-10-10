@@ -6,7 +6,6 @@ class InputManager(EventManager):
         self.keys:set = set()
         self.mousePos = (0,0)
 
-
     def convertKeys(self,keys):
         modifier_keys = {
             pygame.K_LSHIFT: "left shift",

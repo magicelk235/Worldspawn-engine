@@ -10,7 +10,7 @@ class UIObject(sprite.Sprite):
         self.uiParts:list["UIObject"] = []
         for part in self.uiParts:
             self.core.addObject(part)
-        self.rect.renderOrder = 5
+        self.renderOrder = 5
 
     def __del__(self):
         for part in self.uiParts:

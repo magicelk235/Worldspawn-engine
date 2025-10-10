@@ -1,23 +1,32 @@
 from data.core import events
 from pygame.time import set_timer
-import time
-
 
 
 class Timer:
-    startingTime = time.monotonic()
-    def __init__(self,countDown,repeat=False):
-        self.countDown = countDown
+    def __init__(self,core,countDown:int,repeat=False):
+        self.core = core
+        self.countDown:int = countDown
         self.repeat = repeat
         self.stopped = False
-        self.stoppedTime = 0
+        self.stoppedCycle = 0
 
-    @ staticmethod
-    def currentTime():
-        return time.monotonic() - Timer.startingTime
+    def currentCycle(self) -> int:
+        return self.core.cycles
 
-    def getStartTime(self):
-        return self.endTime - self.countDown
+    def getStartTime(self) -> int:
+        return self.endCycle - self.countDown
+
+    def copy(self) -> "Timer":
+        timer = Timer(self.core,self.countDown,self.repeat)
+        timer.stoppedCycle = self.stoppedCycle
+        timer.stopped = self.stopped
+        timer.endCycle = self.endCycle
+        return timer
+
+    def copyAndStop(self):
+        timer = self.copy()
+        timer.stop()
+        return timer
 
     @property
     def countDown(self):
@@ -25,7 +34,7 @@ class Timer:
     @countDown.setter
     def countDown(self,countDown):
         self._countDown = countDown
-        self.endTime = Timer.currentTime() + countDown
+        self.endCycle = self.currentCycle() + countDown
         if self.countDown == -1:
             self.stop()
         else:
@@ -35,42 +44,44 @@ class Timer:
     def remainingTime(self):
         if self.stopped:
             return float("inf")
-        return self.endTime - Timer.currentTime()
+        return self.endCycle - self.currentCycle()
 
     def restart(self):
         self.countDown = self.countDown
     def stop(self):
         self.stopped = True
-        self.stoppedTime = Timer.currentTime()
+        self.stoppedCycle = self.currentCycle()
 
     def start(self):
         if self.stopped:
             self.stopped = False
-            self.countDown = self.endTime - self.stoppedTime
-            self.stoppedTime = 0
+            self.countDown = self.endCycle - self.stoppedCycle
+            self.stoppedCycle = 0
 
     def ended(self) -> bool:
-        if self.remainingTime() <= 0:
+        if self.remainingTime <= 0:
             if self.repeat:
                 self.restart()
             return True
         return False
 
-class TimeManager:
+class TimeManager:# cycles = 20/1000 s
     timerEvent = events.EventRegister.register("timer",None)
-        
     set_timer(timerEvent,20)
 
     def __init__(self,core):
         self.core = core
-        self.timers = {}
+        self.timers:dict[str,Timer] = {}
 
-    def extendTimer(self,name,amount):
+    def extendCycler(self,name,amount):
         timer = self.getTimer(name)
-        timer.endTime += amount
+        timer.endCycle += amount
+
+    def replaceTimer(self,name,timer:Timer) -> None:
+        self.timers[name] = timer
 
     def addTimer(self,name,start=-1,repeat=False):
-        self.timers[name] = Timer(start,repeat)
+        self.timers[name] = Timer(self.core,start,repeat)
 
     def isTimer(self,name):
         return name in self.timers

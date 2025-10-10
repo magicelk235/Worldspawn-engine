@@ -3,14 +3,15 @@ import pygame,socket,pickle,enum,struct
 pygame.init()
 from data.system.api import Api
 from data.system import events
-from data.media import mediaManager
+from data.managers.emittersManager import EmittersManager
 from data.common.runnable import Runnable
 from data.managers import idManager,inputManager
 from data.sprites import aliveObject
 
 
 
-class Core(Api,events.EventManager,idManager.IDManager):
+class Core(idManager.IDManager,Api,events.EventManager):
+    cycles = 0
     @staticmethod
     def objectCreatedEventTemplate(id:str,objectType:str):
         return pygame.event.Event(events.EventRegister.getID("objectCreated"),locals())
@@ -19,9 +20,15 @@ class Core(Api,events.EventManager,idManager.IDManager):
     def objectRemovedEventTemplate(id:str,objectType:str):
         return pygame.event.Event(events.EventRegister.getID("objectRemoved"),locals())
 
+    @ staticmethod
+    def cycleEndedEventTemplate(cycles:int):
+        return pygame.event.Event(events.EventRegister.getID("cycleEnded"),locals())
+
     objectCreatedEvent = events.EventRegister.register("objectCreated",objectCreatedEventTemplate)
 
     objectRemovedEvent = events.EventRegister.register("objectRemoved",objectRemovedEventTemplate)
+
+    cyclesEndedEvent = events.EventRegister.register("cycleEnded",cycleEndedEventTemplate)
 
     class Mode(enum.Enum):
         start = 0
@@ -30,7 +37,7 @@ class Core(Api,events.EventManager,idManager.IDManager):
 
     def __init__(self):
         self.sprites = {}
-        self.mediaManager = mediaManager.mediaManager(self)
+        self.emittersManager = EmittersManager(self)
         
         events.EventManager.__init__(self)
         idManager.IDManager.__init__(self,self.sprites)
@@ -48,6 +55,10 @@ class Core(Api,events.EventManager,idManager.IDManager):
     def updateInput(self):
         pass
 
+
+    def endCycle(self):
+        self.addEvent(self.cycleEndedEventTemplate(self.cycles))
+        self.cycles += 1
 
     def addInputManager(self,id):
         self.inputMangers[id] = inputManager.InputManager()
@@ -101,8 +112,7 @@ class Core(Api,events.EventManager,idManager.IDManager):
         prefabName = object.prefab
         domain = self.getDomain(domainName)
         addFunction = domain.settings["add-function"]
-        scope = {"self": self, "object": object, "id": id}
-        exec(addFunction, {}, scope)
+        exec(addFunction,globals(),locals())
         self.addObjectToGroupById(object,id,domainName)
         self.addObjectToGroupById(object,id,prefabName)
         self.addEvent(self.objectCreatedEventTemplate(id,object.module))
@@ -128,8 +138,8 @@ class Core(Api,events.EventManager,idManager.IDManager):
         prefabName = object.prefab
         domain = self.getDomain(domainName)
         removeFunction = domain.settings["remove-function"]
-        scope = {"self": self, "object": object, "id": id}
-        exec(removeFunction, {}, scope)
+        
+        exec(removeFunction, globals(),locals())
         self.addObjectToGroupById(object,id,domainName)
         self.addObjectToGroupById(object,id,prefabName)
         self.addEvent(self.objectCreatedEventTemplate(id,object.module))
@@ -148,8 +158,9 @@ class Core(Api,events.EventManager,idManager.IDManager):
                 if self.eventHappened(pygame.QUIT):
                     self.running = False
                 self.update()
-                # self.mediaManager.update(self.getObject(self.userID),True)
+                # self.emittersManager.update(self.getObject(self.userID),True)
                 self.clearEvents()
+                self.endCycle()
     
     def encryptIp(self,ip):
         cryptedIp = ""

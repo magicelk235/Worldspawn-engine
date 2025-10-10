@@ -1,11 +1,10 @@
-import pygame,math
-from data.media.animation import Animation
+import pygame
 from dataclasses import dataclass,field
 from data.spatial import rect,hitbox
-from data.sprites import sprite
+from data.sprites.sprite import Sprite,Animation,SpriteData
 from data.inventory import inventory
 from data.core import events
-from data.media import image
+from data.emitters import image
 
 @dataclass
 class rideData:
@@ -14,7 +13,7 @@ class rideData:
     offset:tuple = (0,0)
 
 @dataclass
-class AliveObjectData(sprite.SpriteData):
+class AliveObjectData(SpriteData):
     save:list = field(default_factory=list)
     health:int = 1
     damage:int = 1
@@ -30,7 +29,7 @@ class AliveObjectData(sprite.SpriteData):
         self.save+=["rect","objectType"]
         
 
-class AliveObject(sprite.Sprite):
+class AliveObject(Sprite):
     eventRegister = events.EventRegister
     
     @staticmethod
@@ -130,19 +129,19 @@ class AliveObject(sprite.Sprite):
         self.addEvent(self.healthChangedEventTemplate(self.id,health,self.health))
         self._health = health
 
-    @ sprite.Sprite.x.setter
+    @ Sprite.x.setter
     def x(self,x:int) -> None:
-        sprite.Sprite.x.fset(self,x)
+        Sprite.x.fset(self,x)
         self.visionRect.center = self.axis
 
-    @ sprite.Sprite.y.setter
+    @ Sprite.y.setter
     def y(self,y:int) -> None:
-        sprite.Sprite.y.fset(self,y)
+        Sprite.y.fset(self,y)
         self.visionRect.center = self.axis
 
-    @ sprite.Sprite.dimension.setter
+    @ Sprite.dimension.setter
     def dimension(self,dimension:str) -> None:
-        sprite.Sprite.dimension.fset(self,dimension)
+        Sprite.dimension.fset(self,dimension)
         self.visionRect.dimension = dimension
 
     def shareID(self,id:str) -> bool:

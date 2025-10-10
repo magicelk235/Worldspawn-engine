@@ -1,5 +1,3 @@
-from pathlib import Path
-from sys import modules
 from data.core import events
 from data.common.attributeAccessor import AttributeAccessor
 from data.managers.timeManager import TimeManager
