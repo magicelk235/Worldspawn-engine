@@ -1,11 +1,10 @@
 import pygame
-from data.default.events import EventManager
+from data.system.events import EventManager
 class InputManager(EventManager):
     def __init__(self):
         super().__init__()
         self.keys:set = set()
         self.mousePos = (0,0)
-
 
     def convertKeys(self,keys):
         modifier_keys = {
@@ -50,13 +49,19 @@ class InputManager(EventManager):
     
     def isKeyPressed(self,key:str) -> bool:
         for event in self.getEventList(pygame.KEYDOWN):
-            if event.key == getattr(pygame,f"K_{key.upper if len(key)>1 else key}"):
+            if event.key == self.getKey(key):
                 return True
+        return False
     def isKeyReleased(self,key:str) -> bool:
         for event in self.getEventList(pygame.KEYUP):
-            if event.key == getattr(pygame,f"K_{key.upper if len(key)>1 else key}"):
+            if event.key == self.getKey(key):
                 return True
-            
+        return False
+
+    @staticmethod
+    def getKey(key):
+        return getattr(pygame,f"K_{key.upper if len(key)>1 else key}")
+
     def setRawInput(self,rawEvents,rawKeys,mousePos):
         self.convertEventList(rawEvents)
         self.convertKeys(rawKeys)
@@ -87,6 +92,5 @@ class InputManager(EventManager):
         return self.mousePos
 
     def collideMouse(self,sprite):
-        if sprite.rect.rect.collidepoint(self.getMousePos()):
-            return True
+        return sprite.rect.rect.collidepoint(self.getMousePos())
 

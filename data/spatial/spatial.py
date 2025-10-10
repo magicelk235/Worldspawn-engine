@@ -1,8 +1,8 @@
 import pygame
 from dataclasses import dataclass
-from data.default import events
-from data.default.runnable import Runnable
-from data.default.rect import Rect
+from data.core import events
+
+from data.common.runnable import Runnable
 from sympy import cos,sin,pi
 class Spatial(Runnable):
 
@@ -67,7 +67,7 @@ class Spatial(Runnable):
 
     @ property
     def pos(self) -> tuple[int,int,str]:
-        return self.pos
+        return self._pos
 
     @ property
     def axis(self) -> tuple[int,int]:
@@ -102,9 +102,7 @@ class Spatial(Runnable):
 
     @ pos.setter
     def pos(self,pos:tuple[int,int,str]) -> None:
-        self.x = pos[0]
-        self.y = pos[1]
-        self.dimension = pos[2]
+        self._pos = pos
         
     @ dimension.setter
     def dimension(self,dimension:str) -> None:

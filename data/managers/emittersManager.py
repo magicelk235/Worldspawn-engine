@@ -1,7 +1,6 @@
 
-from data.default import sound,idManager,image,default
-from data.default.rect import Rect
-from data.media import imageLoader
+from data.managers import idManager
+from data.emitters import sound
 import pygame
 
 class DisplayManager(pygame.sprite.Group):
@@ -69,7 +68,7 @@ class AudioManager(idManager.IDManager):
 			source = sound.Sound._channel_to_source.get(pygame.mixer.Channel(event.channel))
 			self.removeObject(source)
 
-class MultiMedia:
+class EmittersManager:
 	def __init__(self,core):
 		self.displayManager = DisplayManager()
 		self.audioManager = AudioManager(core)

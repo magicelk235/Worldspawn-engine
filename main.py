@@ -1,3 +1,3 @@
 import data.core
-test = data.core.Core()
-test.main()
+core = data.core.Core()
+core.main()

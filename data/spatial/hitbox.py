@@ -1,4 +1,4 @@
-from data.default import rect
+from data.spatial.rect import Rect
 import pygame
 class Hitbox:
     def __init__(self,w:int,h:int,xOffset:int=0,yOffset:int=0):
@@ -19,5 +19,5 @@ class Hitbox:
         hitbox.setY(pos[1] + self.yOffset)
         hitbox.setDimension(pos[2])
         
-    def getRect(self,pos:tuple) -> rect.Rect:
-        return rect.Rect(pygame.rect.Rect(*pos[:2], self.w, self.h), pos[2])
+    def getRect(self,pos:tuple) -> Rect:
+        return Rect(pygame.rect.Rect(*pos[:2], self.w, self.h), pos[2])

@@ -1,4 +1,4 @@
-import uuid
+from uuid import uuid4
 class IDManager:
 	def __init__(self,mainGroup:dict):
 		self.usedIDs = set()
@@ -9,7 +9,8 @@ class IDManager:
 		
 	def generateID(self) -> str:
 		while True:
-			id = str(uuid.uuid4())
+			id = str(uuid4())
+			print(id)
 			if not self.idUsed(id):
 				return id
 		
@@ -24,7 +25,7 @@ class IDManager:
 	def addObjectByID(self,object,id:str) -> None:
 		self.usedIDs.add(id)
 		self.group[id] = object
-		object.setID(id)
+		object.id = id
 		
 	def objectExist(self,id:str) -> bool:
 		return self.idUsed(id)

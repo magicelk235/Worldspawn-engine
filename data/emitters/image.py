@@ -1,42 +1,42 @@
-from data.default import default,displayType
-from data.media import imageLoader,fontLoader
+from data.common.attributeAccessor import AttributeAccessor
+from data.spatial.rect import DisplayType
+from data.buffers.assetsLoader import AssetsLoader
 from dataclasses import dataclass
 import pygame,gif_pygame
-
 @ dataclass(frozen=True)
-class ImageData:
+class ImageData(AttributeAccessor):
 	path:str = None
-	scaleSize:int|tuple = -1
-	cutSize:int|tuple = -1
-	flipX:bool = None
-	flipY:bool = None
-	color:tuple = None
-	angle:float = None
-	factoredSize:int = None
-	resetGif:bool = False
-	renderOrder:int = None
-	text:str = None
+	scaleSize:int|tuple|str = -1
+	cutSize:int|tuple|str = -1
+	flipX:bool|str = None
+	flipY:bool|str = None
+	color:tuple|str = None
+	angle:float|str = None
+	factoredSize:int|str = None
+	resetGif:bool|str = False
+	renderOrder:int|str = None
+	text:str|str = None
 
 	def getValue(self,sprite,value):
-		if str(default.getAttr(self,value))[0] == "@":
-			return default.getAttr(sprite,default.getAttr(self,value)[1:])
+		if str(self.getAttr(value))[0] == "@":
+			return sprite.getAttr(self.getAttr(value)[1:])
 		else:
-			return default.getAttr(self,value)
+			return self.getAttr(value)
 	# loaded
 	def setData(self,name,image,sprite):
-		if default.getAttr(self,name) != None:
-			if self.getValue(sprite,name) != default.getAttr(image,name):
-				default.setAttr(image,name,self.getValue(sprite,name))
+		if self.getAttr(name) != None:
+			if self.getValue(sprite,name) != image.setAttr(name):
+				image.setAttr(name,self.getValue(sprite,name))
 		
 	def load(self,image:"Image",sprite):
 		keys = ["path","scaleSize","cutSize","flipX","flipY","color","angle","factoredSize","text"]
 		for key in keys:
 			self.setData(key,image,sprite)
 
-class Image:
+class Image(AttributeAccessor):
 	def __init__(self,sprite,imageData):
 		self.sprite = sprite
-		self.path = imageLoader.defaultPath
+		self.path = ""
 		self.scaleSize = None
 		self.cutSize = None
 		self.flipX = False
@@ -47,7 +47,7 @@ class Image:
 		self.factoredSize = 1
 		self.text = None
 		self.textMode = False
-		self.image = gif_pygame.GIFPygame(imageLoader.getImage(""))
+		self.image = gif_pygame.GIFPygame(AssetsLoader.get("textures",self.path))
 		self.imageData = imageData
 		self.oldPath = None
 		self._cache = {}
@@ -75,7 +75,7 @@ class Image:
 			self.textMode = True
 		if self.image and not self.imageData.resetGif:
 			frame = self.image.frame
-			frame_time = self.image.frame_time
+			frame_time = self.image._frame_time
 
 		self.createGif()
 
@@ -84,7 +84,7 @@ class Image:
 		else:
 			self.image.frame = frame
 
-		self.image.frame_time = frame_time
+		self.image._frame_time = frame_time
 		if self.cutSize == -1:
 			self.cutSize = self.image.get_size()
 		if self.scaleSize == -1:
@@ -98,11 +98,11 @@ class Image:
 
 	def getImageFrames(self):
 		if self.textMode:
-			font = fontLoader.getFont(self.path)
+			font = AssetsLoader.get("fonts",self.path)
 			image = font.render(str(self.text), font,(255,255,255))
 			return [[image,1]]
 		else:
-			return imageLoader.getImage(self.path)
+			return AssetsLoader.get("textures",self.path)
 	
 	def getImageFrame(self):
 		return self.getImageFrames()[self.image.frame][0]
@@ -115,10 +115,10 @@ class Image:
 			self.image = gif_pygame.GIFPygame(self.getImageFrames())
 
 	# display
-	def getAlignmentOffset(self,targetPoint,basePoint=displayType.DisplayType.topLeft):
+	def getAlignmentOffset(self,targetPoint,basePoint=DisplayType.topLeft):
 		tempRect = self.getRawImage().get_rect(**{basePoint.value:(0,0)})
 		base = pygame.math.Vector2(tempRect.topleft)
-		target = pygame.math.Vector2(default.getAttr(tempRect,targetPoint.value))
+		target = pygame.math.Vector2(AttributeAccessor.getAttr(tempRect,targetPoint.value))
 		offset = target - base
 		return offset
 

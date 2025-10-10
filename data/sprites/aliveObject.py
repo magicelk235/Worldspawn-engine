@@ -1,7 +1,10 @@
-import pygame,math
-from data.default.animation import Animation
+import pygame
 from dataclasses import dataclass,field
-from data.default import events,sprite,hitbox,image,rect,displayType,inventory,default
+from data.spatial import rect,hitbox
+from data.sprites.sprite import Sprite,Animation,SpriteData
+from data.inventory import inventory
+from data.core import events
+from data.emitters import image
 
 @dataclass
 class rideData:
@@ -10,12 +13,13 @@ class rideData:
     offset:tuple = (0,0)
 
 @dataclass
-class AliveObjectData(sprite.SpriteData):
+class AliveObjectData(SpriteData):
     save:list = field(default_factory=list)
     health:int = 1
     damage:int = 1
     shield:int = 1
     speed:int = 1
+    react:int = 1
     attackCountDown:int = 1
     visionRadius:int = 200
     rideData:"rideData"=field(default_factory=rideData)
@@ -25,7 +29,7 @@ class AliveObjectData(sprite.SpriteData):
         self.save+=["rect","objectType"]
         
 
-class AliveObject(sprite.Sprite):
+class AliveObject(Sprite):
     eventRegister = events.EventRegister
     
     @staticmethod
@@ -52,11 +56,12 @@ class AliveObject(sprite.Sprite):
     riderDismount = eventRegister.register("riderDismount",riderDismountEventTemplate)
 
 
-    def __init__(self, core, pos: tuple[3],objectData,tag=None,dictData={}):
+    def __init__(self, core, pos: tuple[int,int,str],objectData,tag=None,dictData={}):
         super().__init__(core, pos,objectData)
-        self.health = self.objectData.maxHealth
-        self.tag = tag
         self.resetModifiers()
+        self.health = self.objectData.health
+        self.tag = tag
+
         self.temporaryModifiers = []
         self.allies = set()
         self.attacker = None
@@ -124,19 +129,19 @@ class AliveObject(sprite.Sprite):
         self.addEvent(self.healthChangedEventTemplate(self.id,health,self.health))
         self._health = health
 
-    @ sprite.Sprite.x.setter
+    @ Sprite.x.setter
     def x(self,x:int) -> None:
-        sprite.Sprite.x.fset(self,x)
+        Sprite.x.fset(self,x)
         self.visionRect.center = self.axis
 
-    @ sprite.Sprite.y.setter
+    @ Sprite.y.setter
     def y(self,y:int) -> None:
-        sprite.Sprite.y.fset(self,y)
+        Sprite.y.fset(self,y)
         self.visionRect.center = self.axis
 
-    @ sprite.Sprite.dimension.setter
+    @ Sprite.dimension.setter
     def dimension(self,dimension:str) -> None:
-        sprite.Sprite.dimension.fset(self,dimension)
+        Sprite.dimension.fset(self,dimension)
         self.visionRect.dimension = dimension
 
     def shareID(self,id:str) -> bool:
@@ -192,10 +197,10 @@ class AliveObject(sprite.Sprite):
         self.visionRect.rect.center = self.axis
 
     def resetModifiers(self) -> None:
-        self.maxHealth: int = self.objectData.maxHealth
+        self.maxHealth: int = self.objectData.health
         self.damage: int = self.objectData.damage
         self.attackCountDown = self.objectData.attackCountDown
-        self.shield: float = self.objectData.sheild
+        self.shield: float = self.objectData.shield
         self.speed: int = self.objectData.speed
         self.react: int = self.objectData.react
         self.visionRadius:int = self.objectData.visionRadius
@@ -206,8 +211,7 @@ class AliveObject(sprite.Sprite):
     def applyDamage(self, damage, attacker=None) -> None:
         if self.timers.get("damage", None) == None:
             self.timers["damage"] = 0
-            self.damageEffectOn()
-        if attacker != None and not self.shareID(attacker,id):
+        if attacker != None and not self.shareID(attacker,self.id):
             self.attacker = attacker
             for id in self.allies:
                 self.core.getObject(id).attacker = self.attacker
