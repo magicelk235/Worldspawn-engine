@@ -32,8 +32,8 @@ class DisplayType(Enum):
         startDict = {"top":0,"bottom":1,"center":-0.5}
         endDict = {"left":0,"right":1,"center":0.5}
         start,end = self.getParts()
-        imageSize = image.getSize()
-        size = hitbox.getSize()
+        imageSize = image.size
+        size = hitbox.size
         start,end = startDict[start],endDict[end]
         delta = ((size[0]-imageSize[0])*end,(size[1]-imageSize[1])*start)
         from data.spatial.rect import Rect

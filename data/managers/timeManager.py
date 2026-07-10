@@ -97,6 +97,7 @@ class TimeManager:# cycles = 20/1000 s
 
     def timerEnded(self,name):
         timer = self.getTimer(name)
-        if timer.ended():
-            if not timer.repeat:
-                self.removeTimer(name)
+        ended = timer.ended()
+        if ended and not timer.repeat:
+            self.removeTimer(name)
+        return ended

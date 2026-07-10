@@ -23,9 +23,10 @@ class Sendable:
                 data[key] = obj.toDict()
             else:
                 data[key] = obj
+        return data
     @staticmethod
     def isMutable(obj):
-        return hasattr(obj,"__dict__") and hash(obj) == None 
+        return hasattr(obj,"toDict")
 
     def fromDict(self,data:dict[str,any]) -> None:
         for key in list(data.keys()):
