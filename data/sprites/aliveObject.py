@@ -6,8 +6,8 @@ from data.inventory import inventory
 from data.core import events
 from data.emitters import image
 
-@dataclass
-class rideData:
+@dataclass(frozen=True)
+class RideData:
     point:tuple = (0,0)
     max:int = 1
     offset:tuple = (0,0)
@@ -22,13 +22,13 @@ class AliveObjectData(SpriteData):
     react:int = 1
     attackCountDown:int = 1
     visionRadius:int = 200
-    rideData:"rideData"=field(default_factory=rideData)
+    inventorySize:int = 5
+    rideData:RideData=field(default_factory=RideData)
 
     def __post_init__(self):
         super().__post_init__()
         self.save+=["rect","objectType"]
         
-
 class AliveObject(Sprite):
     eventRegister = events.EventRegister
     
@@ -78,6 +78,7 @@ class AliveObject(Sprite):
     @ target.setter
     def target(self,target):
         self._target = target
+
     def hasTarget(self):
         return self.target is not None
 
@@ -156,6 +157,16 @@ class AliveObject(Sprite):
 
     def collideVisionCheck(self,other:"AliveObject") -> bool:
         return other.collideCheckRect(self.visionRect)
+
+    @ property
+    def inventorySize(self) -> int:
+        return self._inventorySize
+    
+    @ inventorySize.setter
+    def inventorySize(self,inventorySize):
+        self._inventorySize = inventorySize
+        self.inventory.size = (inventorySize,inventorySize)
+
 
     @property
     def maxHealth(self):

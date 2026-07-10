@@ -108,6 +108,29 @@ class Inventory:
 		self.handPos = (4,4)
 		self.clearInventory()
 
+	@ property
+	def height(self):
+		return self.size[1]
+
+	@height.setter
+	def height(self, height):
+		self.size = (self.size[0],height)
+
+	@ property
+	def width(self):
+		return self.size[0]
+
+	@width.setter
+	def width(self, width):
+		self.size = (width,self.size[1])
+
+
+	@ property
+	def size(self):
+		return self._size
+	@size.setter
+	def size(self, value:tuple[int,int]):
+		self._size = value
 
 
 	# getters
@@ -131,19 +154,6 @@ class Inventory:
 			return self.getItem(*self.findItem(name))
 		except:
 			return None
-
-
-
-	# setters
-	def setSize(self,size):
-		self.size = size
-		
-	def setH(self,h):
-		
-		self.size = (self.w,h)
-	def setW(self,w):
-		self.size = (w,self.h)
-
 
 
 	# inventory functions
