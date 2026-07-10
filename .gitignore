@@ -6,6 +6,10 @@ __pycache__/
 # Ignore macOS system files
 .DS_Store
 
+# Local agent/tooling files
+.claude/
+CLAUDE.md
+
 packages/package/
 
 # C extensions
@@ -174,4 +178,3 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
-.DS_Store
