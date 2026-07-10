@@ -24,14 +24,15 @@ class Spatial(Runnable):
         def getSpeed(self,spatial:"Spatial"):
             return spatial.speed if self.speed == None else self.speed
 
-        def calculateDelta(self) -> tuple[float,float]:
-            speed = self.getSpeed
+        def calculateDelta(self,spatial:"Spatial") -> tuple[float,float]:
+            speed = self.getSpeed(spatial)
             dx = speed*self.direction[0]
             dy = speed*self.direction[1]
             return dx, dy
 
         def update(self,spatial:"Spatial") -> bool:
-            spatial.axis = self.calculateDelta()
+            dx,dy = self.calculateDelta(spatial)
+            spatial.axis = (spatial.x+dx, spatial.y+dy)
             return self.decTime()
 
         def mergeOpposeds(self,vectors) -> None:
@@ -91,7 +92,7 @@ class Spatial(Runnable):
         self.addEvent(self.moveEventTemplate(self.id))
     @ y.setter
     def y(self,y:int) -> None:
-        self.pos = (y,)+(self.x,)+(self.dimension,)
+        self.pos = (self.x,)+(y,)+(self.dimension,)
         self.objectData.hitbox.updateRect(self.rect, self.pos)
         self.addEvent(self.moveEventTemplate(self.id))
     
@@ -106,7 +107,7 @@ class Spatial(Runnable):
         
     @ dimension.setter
     def dimension(self,dimension:str) -> None:
-        self.pos = self.getAxis+(dimension,)
+        self.pos = self.axis+(dimension,)
         self.rect.dimension = dimension
         self.addEvent(self.moveEventTemplate(self.id))
 
