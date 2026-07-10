@@ -53,7 +53,7 @@ class Rect(sendable.Sendable):
         self.fracY = 0
 
     def toDict(self):
-        return super().toDict(["x","y","w","h","dimension","displayType"])
+        return super().toDict(["x","y","w","h","dimension"])
 
     @staticmethod
     def addPos(pos1,pos2):

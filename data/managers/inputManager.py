@@ -68,9 +68,9 @@ class InputManager(EventManager):
         self.mousePos = mousePos
 
     def setInput(self,events,keys,mousePos):
-        self.events = events
-        self.keys = keys
-        self.mousePos = mousePos
+        self.convertEventList(events)
+        self.keys = set(keys)
+        self.mousePos = tuple(mousePos)
     
     def mouseClicked(self,right=False):
         for event in self.getEventList(pygame.MOUSEBUTTONDOWN):
