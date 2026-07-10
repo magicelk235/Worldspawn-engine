@@ -125,7 +125,8 @@ class Api:
         setattr(self,name,MethodType(func,self))
 
     def addToBase(self,newClass):
-        self.__class__.__bases__ = self.__class__.__bases__+(newClass,)
+        if newClass not in self.__class__.__bases__:
+            self.__class__.__bases__ = self.__class__.__bases__+(newClass,)
         newClass.__init__(self)
     @ staticmethod
     def getPackageSettings(name:str) -> dict:

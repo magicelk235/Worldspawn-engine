@@ -138,11 +138,12 @@ class Core(idManager.IDManager,Api,events.EventManager):
         prefabName = object.prefab
         domain = self.getDomain(domainName)
         removeFunction = domain.settings["remove-function"]
-        
+
         exec(removeFunction, globals(),locals())
-        self.addObjectToGroupById(object,id,domainName)
-        self.addObjectToGroupById(object,id,prefabName)
-        self.addEvent(self.objectCreatedEventTemplate(id,object.module))
+        self.removeObjectToGroupById(id,domainName)
+        self.removeObjectToGroupById(id,prefabName)
+        self.emittersManager.removeObject(object)
+        self.addEvent(self.objectRemovedEventTemplate(id,object.module))
 
     def getAliveObjects(self):
         aliveObjects = {}
@@ -158,9 +159,12 @@ class Core(idManager.IDManager,Api,events.EventManager):
                 if self.eventHappened(pygame.QUIT):
                     self.running = False
                 self.update()
-                # self.emittersManager.update(self.getObject(self.userID),True)
+                player = self.getObject(self.userID)
+                if player != None:
+                    self.emittersManager.update(player,True)
                 self.clearEvents()
                 self.endCycle()
+            pygame.time.wait(1)
     
     def encryptIp(self,ip):
         cryptedIp = ""

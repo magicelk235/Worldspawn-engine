@@ -5,11 +5,10 @@ from data.managers.timeManager import TimeManager
 class Runnable(TimeManager,events.EventManager,AttributeAccessor):
     eventRegister = events.EventRegister
 
-    def getModel(self,start=0,end:int|None=None):
+    def getModel(self,start=0,end:int=None):
         path = self.__class__.__module__.split(".")
         path = path[start:end]
         return "/".join(path)
-
 
     @ property
     def name(self):
@@ -26,7 +25,7 @@ class Runnable(TimeManager,events.EventManager,AttributeAccessor):
 
     @ property
     def prefabPath(self):
-        return self.prefab+self.name
+        return f"{self.prefab}.{self.getModel(4,5)}"
 
     def __init__(self,core):
         TimeManager.__init__(self,core)
@@ -55,7 +54,7 @@ class Runnable(TimeManager,events.EventManager,AttributeAccessor):
             for event in self.core.getEventList(self.eventRegister.getID("objectRemoved")):
                 for name in list(self.idGroups.keys()):
                     if self.idGroups[name](event.id):
-                        getattr(self,name).add(event.id)
+                        getattr(self,name).discard(event.id)
     def addIdGroup(self,name,checkFunc):
         self.idGroups[name] = checkFunc
 

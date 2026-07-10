@@ -7,14 +7,24 @@ class DisplayManager(pygame.sprite.Group):
 	def __init__(self):
 		super().__init__()
 		self.size = (800,400)
+
+
+	@ property
+	def halfW(self):
+		return self.size[0] // 2
+	@ property
+	def halfH(self):
+		return self.size[1] // 2
+
+
+	@ property
+	def size(self):
+		return self._size
+	@size.setter
+	def size(self, value:tuple[int,int]):
+		self._size = value
 		self.screen = pygame.display.set_mode(self.size, pygame.SCALED | pygame.RESIZABLE)
 		self.displaySurface = pygame.display.get_surface()
-
-		self.halfW = self.screen.get_width() // 2
-		self.halfH = self.screen.get_height() // 2
-
-	def getSize(self):
-		return self.size
 
 	def removeObject(self,object):
 		self.remove(object)
@@ -22,7 +32,7 @@ class DisplayManager(pygame.sprite.Group):
 	def update(self,player,updateAllGifs=False):
 		self.screen.fill((0,0,0))
 		playerOffset = pygame.math.Vector2()
-		playerCenter = player.center
+		playerCenter = player.rect.center
 		playerOffset.x = playerCenter[0] - self.halfW
 		playerOffset.y = playerCenter[1] - self.halfH
 		defaultRenderOrder = []
@@ -31,10 +41,9 @@ class DisplayManager(pygame.sprite.Group):
 		for sprite in sorted(self.sprites(), key=lambda sprite: sprite.renderOrder):
 			if updateAllGifs:
 				sprite.image.image._animate()
-			if sprite.rect.renderOrder < 4:
+			if sprite.renderOrder < 4:
 				sprite.display(self.displaySurface,player,playerOffset)
-			elif sprite.rect.renderOrder == 4:
-				
+			elif sprite.renderOrder == 4:
 				defaultRenderOrder.append(sprite)
 			else:
 				lateRenderOrder.append(sprite)
@@ -82,6 +91,11 @@ class EmittersManager:
 		
 	def removeObject(self,object):
 		self.displayManager.removeObject(object)
+
+	@ property
+	def screenSize(self):
+		return self.displayManager.getSize()
+
 
 	def getScreenSize(self):
 		return self.displayManager.getSize()
