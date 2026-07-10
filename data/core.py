@@ -2,7 +2,7 @@
 import pygame,socket,pickle,enum,struct
 pygame.init()
 from data.system.api import Api
-from data.system import events
+from data.system import events, errors
 from data.managers.emittersManager import EmittersManager
 from data.common.runnable import Runnable
 from data.managers import idManager,inputManager
@@ -10,7 +10,7 @@ from data.sprites import aliveObject
 
 
 
-class Core(idManager.IDManager,Api,events.EventManager):
+class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
     cycles = 0
     @staticmethod
     def objectCreatedEventTemplate(id:str,objectType:str):
