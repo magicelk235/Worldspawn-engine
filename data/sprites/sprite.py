@@ -1,20 +1,21 @@
 from data.core import events
 from data.spatial.hitbox import Hitbox
-from data.managers.timeManager import TimeManager,Timer
-from data.spatial import hitbox,spatial,rect
+from data.managers.timeManager import Timer
+from data.spatial import hitbox,spatial
+from data.spatial.rect import Rect,DisplayType
 from data.common import sendable
-from sympy import cos,sin,pi # type: ignore
+from sympy import cos,sin,pi
 from data import core
 from dataclasses import dataclass,field
 import pygame,enum
-from data.emitters import image
+from data.emitters.image import Image,ImageData
 from typing import Callable
 import queue
 
 @ dataclass
 class Animation:
-    imageData:image.ImageData = image.ImageData()
-    displayType:rect.DisplayType = rect.DisplayType.topLeft
+    imageData:ImageData = ImageData()
+    displayType:DisplayType = DisplayType.topLeft
     countDown:float = -1.0
     weight:int = 1
     moveable:bool = True
@@ -23,26 +24,24 @@ class Animation:
     endFunc:Callable = lambda x: None
     timer:Timer = None
     
-
     @ property
     def resetGif(self):
         return self.imageData.resetGif
 
     def load(self,sprite:"Sprite"):
         sprite.addTimer("animation",self.countDown,True)
-        oldAnimation = sprite.getAnimation(sprite.previousAnimation)
-        previousAnimation = sprite.getCurrentAnimation()
-        if not previousAnimation.resetGif and self == oldAnimation:
+        if not self.resetGif and self.timer != None:
             sprite.replaceTimer("animation",self.timer)
-        
         sprite.moveable = self.moveable
         sprite.displayType = self.displayType
         sprite.image.setImageData(self.imageData)
+        if self.resetGif:
+            sprite.image.image.reset()
         self.startFunc(sprite)
 
     def unload(self,sprite:"Sprite",newAnimation:"Animation"):
-        if not newAnimation.resetGif:
-            self.timer = sprite.getTimer("animation")
+        if not self.resetGif:
+            self.timer = sprite.getTimer("animation").copy()
         self.endFunc(sprite)
 
     def getImageData(self):
@@ -56,14 +55,14 @@ class Animation:
 
 @ dataclass
 class SpriteData:
-    hitbox:Hitbox = field(default_factory=Hitbox(1,1))
+    hitbox:Hitbox = field(default_factory=lambda: Hitbox(1,1))
     animations:dict[str:Animation] = field(default_factory=dict)
     clientData:list = field(default_factory=list)
     displayByDirectionX:bool = True
     displayByDirectionY:bool = False
 
     def __post_init__(self):
-        self.clientData=["rect","objectType","currentAnimation"]+self.clientData
+        self.clientData=["rect","currentAnimation"]+self.clientData
 
 
 class Sprite(spatial.Spatial,pygame.sprite.Sprite,sendable.Sendable):
@@ -99,12 +98,12 @@ class Sprite(spatial.Spatial,pygame.sprite.Sprite,sendable.Sendable):
         self.directionX:"Sprite.DirectionX" = self.DirectionX.left
         self.directionY:"Sprite.DirectionY" = self.DirectionY.top
         self.addTimer("animation",repeat=True)
-        self.image: image.Image = image.Image(self,self.getAnimation().getImageData())
+        self.image: Image = Image(self.getAnimation().getImageData())
         self.core = core
         self.visible:bool = True
         self.speed:int = 1
         self.moveable:bool = True
-        self.rect:rect.Rect = self.objectData.hitbox.getRect(pos)
+        self.rect:Rect = self.objectData.hitbox.getRect(pos)
         self.previousAnimation:str = "default"
         self.currentAnimation:str = "default"
         self.animationsQueue = queue.Queue()
@@ -138,7 +137,7 @@ class Sprite(spatial.Spatial,pygame.sprite.Sprite,sendable.Sendable):
         change = (0,0)
         if self.moveable:
             for vector in self.vectors.values():
-                change = rect.Rect.addPos(change,vector.calculateDelta())
+                change = Rect.addPos(change,vector.calculateDelta(self))
         if change[0] > 0:
             self.directionX = self.DirectionX.right
         elif change[0] < 0:
@@ -179,33 +178,32 @@ class Sprite(spatial.Spatial,pygame.sprite.Sprite,sendable.Sendable):
         return self.objectData.animations.get(name,self.objectData.animations["default"])
 
     def loadCurrentAnimation(self) -> None:
-        animation = self.getAnimation(self.currentAnimation)
-        animation.unload(self,self.getAnimation(self.currentAnimation))
-        animation.load(self)
-        
+        self.getCurrentAnimation().load(self)
+
     def loadAnimation(self,name:str="default") -> None:
         if self.currentAnimation != name:
-            self.getCurrentAnimation().unload(self)
+            newAnimation = self.getAnimation(name)
+            self.getCurrentAnimation().unload(self,newAnimation)
             self.addEvent(self.switchAnimationEventTemplate(name,self.currentAnimation,self.id))
+            self.previousAnimation = self.currentAnimation
             self.currentAnimation = name
             self.loadCurrentAnimation()
 
     def getCurrentAnimation(self) -> Animation:
         return self.getAnimation(self.currentAnimation)
 
-    def getNextAnimation(self) -> Animation:
+    def getNextAnimationName(self) -> str:
         if self.animationsQueue.empty():
-            return self.getAnimation()
-        return self.getAnimation(self.animationsQueue.get())
+            return self.getCurrentAnimation().nextAnimation
+        return self.animationsQueue.get()
 
     def updateAnimations(self) -> None:
         if self.timerEnded("animation"):
-            self.getCurrentAnimation().unload(self,)
-            self.loadAnimation()
+            self.loadAnimation(self.getNextAnimationName())
 
     def setAnimation(self,name,extend=True) -> None:
         if extend and name == self.currentAnimation:
-            self.extendTimer()
+            self.getTimer("animation").restart()
         if self.getAnimation(name).weightCheck(self.getCurrentAnimation()):
             self.loadAnimation(name)
 
@@ -232,7 +230,7 @@ class Sprite(spatial.Spatial,pygame.sprite.Sprite,sendable.Sendable):
         return self.isVisible()
 
     def display(self,displaySurf,player,displayOffset) -> None:
-        if self.canDisplay():
+        if self.canDisplay(displaySurf,player,displayOffset):
             self.displayImage(displaySurf,player,displayOffset)
 
     def displayImage(self,displaySurf,player,displayOffset) -> None:
@@ -250,15 +248,15 @@ class Sprite(spatial.Spatial,pygame.sprite.Sprite,sendable.Sendable):
     def collideCheckIgnoreDimensions(self,other:"Sprite"):
         return self.rect.collideRectIgnoreDimension(other.rect)
         
-    def collideCheckRect(self,rect:rect.Rect,additionalRange:int=0) -> bool:
+    def collideCheckRect(self,rect:Rect,additionalRange:int=0) -> bool:
         return self.rect.collideRect(rect,additionalRange)
         
     @ property
-    def displayType(self) -> rect.DisplayType:
+    def displayType(self) -> DisplayType:
         return self.rect.displayType
 
     @ displayType.setter
-    def displayType(self,displayType:rect.DisplayType):
+    def displayType(self,displayType:DisplayType):
         self.rect.displayType = displayType
 
     # update/main
