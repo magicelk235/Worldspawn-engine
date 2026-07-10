@@ -2,119 +2,74 @@ from data.common.attributeAccessor import AttributeAccessor
 from data.spatial.rect import DisplayType
 from data.buffers.assetsLoader import AssetsLoader
 from dataclasses import dataclass
-import pygame,gif_pygame
+import pygame
+from gif_pygame import GIFPygame
 @ dataclass(frozen=True)
 class ImageData(AttributeAccessor):
 	path:str = None
-	scaleSize:int|tuple|str = -1
-	cutSize:int|tuple|str = -1
-	flipX:bool|str = None
-	flipY:bool|str = None
-	color:tuple|str = None
-	angle:float|str = None
-	factoredSize:int|str = None
-	resetGif:bool|str = False
-	renderOrder:int|str = None
-	text:str|str = None
+	scaleSize:int|tuple = -1
+	cutSize:int|tuple = -1
+	flipX:bool = False
+	flipY:bool = False
+	color:tuple = (255,255,255,255)
+	angle:float = 0
+	factoredSize:int = 1
+	renderOrder:int = 4
+	text:str = None
+	resetGif:bool = True
 
-	def getValue(self,sprite,value):
-		if str(self.getAttr(value))[0] == "@":
-			return sprite.getAttr(self.getAttr(value)[1:])
-		else:
-			return self.getAttr(value)
-	# loaded
-	def setData(self,name,image,sprite):
-		if self.getAttr(name) != None:
-			if self.getValue(sprite,name) != image.setAttr(name):
-				image.setAttr(name,self.getValue(sprite,name))
-		
-	def load(self,image:"Image",sprite):
-		keys = ["path","scaleSize","cutSize","flipX","flipY","color","angle","factoredSize","text"]
-		for key in keys:
-			self.setData(key,image,sprite)
+	def toDict(self) -> dict[str,any]:
+		return dict(self.__dict__)
+
+	def load(self,image:"Image"):
+		for key in list(self.__dict__.keys()):
+			image.setAttr(key, self.__dict__[key])
 
 class Image(AttributeAccessor):
-	def __init__(self,sprite,imageData):
-		self.sprite = sprite
-		self.path = ""
-		self.scaleSize = None
-		self.cutSize = None
-		self.flipX = False
-		self.flipY = False
-		self.color = (255,255,255,255)
-		self.angle = 0
-		self.renderOrder = 4
-		self.factoredSize = 1
-		self.text = None
-		self.textMode = False
-		self.image = gif_pygame.GIFPygame(AssetsLoader.get("textures",self.path))
-		self.imageData = imageData
-		self.oldPath = None
-		self._cache = {}
-		self.loadImage()
+	_cache = {}
+	def __init__(self,imageData:ImageData):
+		self.oldPath:str = None
+		self.textMode:bool = False
+		self.image:GIFPygame = None
+		self.setImageData(imageData)
 
-	def getSize(self):
+	@ property
+	def size(self):
 		return self.getRawImage().get_size()
 
-	# data setter
-	def setImageData(self,imageData):
+	def setImageData(self,imageData:ImageData):
 		self.imageData = imageData
 		self.loadImage()
 
 	def toDict(self):
-		return {"path":self.path,"scaleSize":self.scaleSize,"cutSize":self.cutSize,"flipX":self.flipX,"flipY":self.flipY,"color":self.color,"angle":self.angle,"factoredSize":self.factoredSize,"text":self.text,"textMode":self.textMode,"image.frame":self.image.frame}
+		return self.imageData.toDict()|{"image.frame":self.image.frame}
 
 	def toHash(self):
 		return str(self.toDict())
 
 	def loadImage(self):
-		frame = 0
-		frame_time = 0
-		self.imageData.load(self,self.sprite)
-		if self.text != None:
-			self.textMode = True
-		if self.image and not self.imageData.resetGif:
-			frame = self.image.frame
-			frame_time = self.image._frame_time
-
-		self.createGif()
-
-		if len(self.image.frames)<=frame:
-			self.image.frame = len(self.image.frames)-1
-		else:
-			self.image.frame = frame
-
-		self.image._frame_time = frame_time
+		self.imageData.load(self)
+		self.textMode = self.text != None
+		if self.textMode or self.image == None or self.path != self.oldPath:
+			self.image = GIFPygame(self.frames)
+			self.oldPath = self.path
 		if self.cutSize == -1:
 			self.cutSize = self.image.get_size()
 		if self.scaleSize == -1:
 			self.scaleSize = self.image.get_size()
-		
-		
 
-	def updateImage(self):
-		if self.sprite.eventHappened():
-			self.loadImage()
-
-	def getImageFrames(self):
+	@ property
+	def frames(self):
 		if self.textMode:
 			font = AssetsLoader.get("fonts",self.path)
-			image = font.render(str(self.text), font,(255,255,255))
+			image = font.render(str(self.text),True,(255,255,255))
 			return [[image,1]]
-		else:
-			return AssetsLoader.get("textures",self.path)
-	
-	def getImageFrame(self):
-		return self.getImageFrames()[self.image.frame][0]
+		return AssetsLoader.get("textures",self.path)
 
-	def createGif(self):
-		if self.textMode:
-			self.image = gif_pygame.GIFPygame(self.getImageFrames())
-		elif self.path != self.oldPath:
-			self.getImageFrames()
-			self.image = gif_pygame.GIFPygame(self.getImageFrames())
+	@ property
+	def currentFrame(self):
+		return self.image.get_current_surface()
 
-	# display
 	def getAlignmentOffset(self,targetPoint,basePoint=DisplayType.topLeft):
 		tempRect = self.getRawImage().get_rect(**{basePoint.value:(0,0)})
 		base = pygame.math.Vector2(tempRect.topleft)
@@ -122,39 +77,21 @@ class Image(AttributeAccessor):
 		offset = target - base
 		return offset
 
-	def getRawImageByData(self):
-		try:
-			return self._cache[self.toHash()]
-		except:
-			image = self.getImageFrame()
-			image = pygame.transform.scale(image,self.scaleSize)
-			
-			image = self.cutImage(image)
-			image = pygame.transform.scale_by(image,self.factoredSize)
-			image.fill(self.color,special_flags=pygame.BLEND_RGBA_MULT)
-			image = pygame.transform.flip(image,self.flipX,self.flipY)
-			image = pygame.transform.rotate(image,self.angle)
-			self._cache[self.toHash()] = image
-			return image
-
 	def getRawImage(self):
-		self.updateImage()
-		return self.getRawImageByData(self._cache,self.toDict())
-
-	@ staticmethod
-	def displayFromData(displaySurf,pos,data,_cache):
-		rawImage = Image.getRawImageByData(_cache,data)
-		Image.displayImage(displaySurf,pos,rawImage)
-		
+		key = self.toHash()
+		if key not in self._cache:
+			frame = self.currentFrame
+			frame = pygame.transform.scale(frame,self.scaleSize)
+			frame = self.cutImage(frame)
+			frame = pygame.transform.scale_by(frame,self.factoredSize)
+			frame.fill(self.color,special_flags=pygame.BLEND_RGBA_MULT)
+			frame = pygame.transform.flip(frame,self.flipX,self.flipY)
+			frame = pygame.transform.rotate(frame,self.angle)
+			self._cache[key] = frame
+		return self._cache[key]
 
 	def display(self,displaySurf,pos):
-		rawImage = self.getRawImage()
-
-		self.displayImage(displaySurf,pos,rawImage)
-	
-	@ staticmethod
-	def displayImage(displaySurf, pos,image):
-		displaySurf.blit(image, pos)
+		displaySurf.blit(self.getRawImage(), pos)
 
 	def cutImage(self,image):
 		if image.get_size() == self.cutSize:
@@ -163,7 +100,7 @@ class Image(AttributeAccessor):
 			image.subsurface(pygame.Rect(0, 0, *self.cutSize))
 			return image
 		except:
-			newImage = pygame.surface.Surface(self.cutSize,pygame.SRCALPHA)	
+			newImage = pygame.surface.Surface(self.cutSize,pygame.SRCALPHA)
 			tile_w, tile_h = image.get_size()
 			target_w, target_h = self.cutSize
 			for y in range(0, target_h, tile_h):
