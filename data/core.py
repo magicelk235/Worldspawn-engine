@@ -209,6 +209,11 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
         os.makedirs(folder,exist_ok=True)
         sprites = {}
         for id,object in list(self.sprites.items()):
+            # sprites that only exist to show something - menus, cursors,
+            # anything a package rebuilds on its own - set persistent False
+            # so a saved world holds world state and nothing else
+            if not getattr(object,"persistent",True):
+                continue
             sprites[id] = {"prefabPath":object.prefabPath,"data":object.toSaveData()}
         custom = {}
         for packageName,package in self.packages.items():
