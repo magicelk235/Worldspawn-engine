@@ -1,5 +1,7 @@
 import json, socket, struct, threading, queue
 
+MAX_MESSAGE_SIZE = 16 * 1024 * 1024  # refuse absurd length prefixes from bad peers
+
 def sendMessage(sock, data) -> None:
     payload = json.dumps(data).encode()
     sock.sendall(struct.pack(">I", len(payload)) + payload)
@@ -18,6 +20,8 @@ def receiveMessage(sock):
     if rawSize == None:
         return None
     size = struct.unpack(">I", rawSize)[0]
+    if size > MAX_MESSAGE_SIZE:
+        return None
     raw = recvall(sock, size)
     if raw == None:
         return None

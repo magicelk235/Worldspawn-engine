@@ -1,5 +1,5 @@
 
-import pygame,enum
+import pygame,enum,uuid
 pygame.init()
 from data.system.api import Api
 from data.system import events, errors, network
@@ -32,6 +32,10 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
     def clientDisconnectedEventTemplate(clientID:str):
         return pygame.event.Event(events.EventRegister.getID("clientDisconnected"),locals())
 
+    @staticmethod
+    def networkMessageEventTemplate(clientID:str,data):
+        return pygame.event.Event(events.EventRegister.getID("networkMessage"),locals())
+
     objectCreatedEvent = events.EventRegister.register("objectCreated",objectCreatedEventTemplate)
 
     objectRemovedEvent = events.EventRegister.register("objectRemoved",objectRemovedEventTemplate)
@@ -41,6 +45,8 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
     clientConnectedEvent = events.EventRegister.register("clientConnected",clientConnectedEventTemplate)
 
     clientDisconnectedEvent = events.EventRegister.register("clientDisconnected",clientDisconnectedEventTemplate)
+
+    networkMessageEvent = events.EventRegister.register("networkMessage",networkMessageEventTemplate)
 
     class Mode(enum.Enum):
         start = 0
@@ -199,61 +205,140 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
     
     def host(self,port:int):
         self.network = network.HostNetwork(port)
+        self.clientIdentities = {}   # transport id -> stable client id
+        self.clientTransports = {}   # stable client id -> transport id
+        self.clientMirrors = {}      # stable client id -> last data sent per sprite
         self.mode = self.Mode.host
         pygame.display.set_caption("WorldSpawn - hosting")
 
-    def join(self,ip:str,port:int) -> bool:
+    def join(self,ip:str,port:int,identity:str=None) -> bool:
         try:
             self.network = network.ClientNetwork(ip,port)
         except OSError as e:
             self.raiseError("connectionFailed",str(e))
             return False
+        self.identity = identity if identity != None else uuid.uuid4().hex
+        self.network.send({"type":"hello","identity":self.identity})
         self.mode = self.Mode.join
         pygame.display.set_caption("WorldSpawn - client")
         return True
 
-    def buildSnapshot(self) -> dict:
-        sprites = {}
-        for id,object in list(self.sprites.items()):
-            sprites[id] = {"prefabPath":object.prefabPath,"data":object.toData()}
-        return {"type":"snapshot","sprites":sprites}
+    def send(self,data,clientID:str=None) -> None:
+        """Send a package-defined message. Client -> host, or host -> one/all clients."""
+        message = {"type":"custom","data":data}
+        if self.mode == self.Mode.join:
+            self.network.send(message)
+        elif self.mode == self.Mode.host:
+            if clientID == None:
+                self.network.broadcast(message)
+            else:
+                transportID = self.clientTransports.get(clientID)
+                if transportID != None:
+                    self.network.sendTo(transportID,message)
 
-    def applySnapshot(self,snapshot:dict) -> None:
-        seen = snapshot["sprites"]
-        for id in list(self.sprites.keys()):
-            if id not in seen:
+    def filterVisible(self,clientID:str,sprites:dict) -> dict:
+        """Which sprites a client may see. Packages override via createFunction."""
+        return sprites
+
+    def attachClient(self,transportID:str,clientID:str) -> None:
+        oldTransport = self.clientTransports.get(clientID)
+        if oldTransport != None and oldTransport != transportID:
+            self.clientIdentities.pop(oldTransport,None)
+            self.network.dropClient(oldTransport)
+        self.clientIdentities[transportID] = clientID
+        self.clientTransports[clientID] = transportID
+        self.clientMirrors[clientID] = {}
+        self.addInputManager(clientID)
+        self.network.sendTo(transportID,{"type":"welcome","clientID":clientID})
+        self.addEvent(self.clientConnectedEventTemplate(clientID))
+
+    def detachClient(self,transportID:str) -> None:
+        clientID = self.clientIdentities.pop(transportID,None)
+        if clientID == None or self.clientTransports.get(clientID) != transportID:
+            return
+        self.clientTransports.pop(clientID,None)
+        self.clientMirrors.pop(clientID,None)
+        self.inputMangers.pop(clientID,None)
+        self.addEvent(self.clientDisconnectedEventTemplate(clientID))
+
+    def syncClients(self) -> None:
+        if not self.clientTransports:
+            return
+        current = {}
+        for id,object in list(self.sprites.items()):
+            current[id] = {"prefabPath":object.prefabPath,"data":object.toData()}
+        for clientID,transportID in list(self.clientTransports.items()):
+            visible = self.filterVisible(clientID,self.sprites)
+            mirror = self.clientMirrors[clientID]
+            changed = {}
+            for id in visible:
+                entry = current.get(id)
+                if entry == None:
+                    continue
+                known = mirror.get(id)
+                if known == None:
+                    changed[id] = entry
+                else:
+                    diff = {key:value for key,value in entry["data"].items() if known.get(key) != value}
+                    if diff:
+                        changed[id] = {"data":diff}
+            removed = [id for id in mirror if id not in visible or id not in current]
+            if changed or removed:
+                self.network.sendTo(transportID,{"type":"delta","changed":changed,"removed":removed})
+            for id in removed:
+                mirror.pop(id,None)
+            for id,entry in changed.items():
+                known = mirror.get(id)
+                if known == None:
+                    mirror[id] = dict(entry["data"])
+                else:
+                    known.update(entry["data"])
+
+    def applyDelta(self,message:dict) -> None:
+        for id in message["removed"]:
+            if self.getObject(id) != None:
                 self.removeObjectByID(id)
-        for id,entry in seen.items():
-            object = self.sprites.get(id)
+        for id,entry in message["changed"].items():
+            object = self.getObject(id)
+            data = dict(entry["data"])
             if object == None:
-                cls = self.getObjectByPrefabPath(entry["prefabPath"])
+                prefabPath = entry.get("prefabPath")
+                rect = data.get("rect")
+                if prefabPath == None or rect == None:
+                    continue
+                cls = self.getObjectByPrefabPath(prefabPath)
                 if cls == None:
                     continue
-                rect = entry["data"]["rect"]
                 object = cls(self,(rect["x"],rect["y"],rect["dimension"]))
                 self.addObjectByID(object,id)
-            data = dict(entry["data"])
             currentAnimation = data.pop("currentAnimation",None)
-            rect = data["rect"]
+            rect = data.get("rect")
             object.fromDict(data)
-            object.pos = (rect["x"],rect["y"],rect["dimension"])
+            if rect != None:
+                object.pos = (rect["x"],rect["y"],rect["dimension"])
             if currentAnimation != None:
                 object.loadAnimation(currentAnimation)
 
     def hostUpdate(self):
         while not self.network.messages.empty():
-            clientID,message = self.network.messages.get()
-            if message["type"] == "connected":
-                self.addInputManager(clientID)
-                self.network.sendTo(clientID,{"type":"welcome","clientID":clientID})
-                self.addEvent(self.clientConnectedEventTemplate(clientID))
-            elif message["type"] == "disconnected":
-                self.inputMangers.pop(clientID,None)
-                self.addEvent(self.clientDisconnectedEventTemplate(clientID))
-            elif message["type"] == "input":
-                self.setInput(clientID,[],message["keys"],message["mouse"])
+            transportID,message = self.network.messages.get()
+            messageType = message.get("type")
+            if messageType == "hello":
+                identity = message.get("identity")
+                self.attachClient(transportID,str(identity) if identity != None else transportID)
+            elif messageType == "disconnected":
+                self.detachClient(transportID)
+            elif messageType == "input":
+                clientID = self.clientIdentities.get(transportID)
+                if clientID != None:
+                    events = inputManager.deserializeEvents(message.get("events",[]))
+                    self.setInput(clientID,events,message["keys"],message["mouse"])
+            elif messageType == "custom":
+                clientID = self.clientIdentities.get(transportID)
+                if clientID != None:
+                    self.addEvent(self.networkMessageEventTemplate(clientID,message["data"]))
         self.serverUpdate()
-        self.network.broadcast(self.buildSnapshot())
+        self.syncClients()
 
     def clientNetworkUpdate(self):
         if not self.network.connected:
@@ -263,16 +348,19 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
             return
         localInput = self.inputMangers.get(self.userID)
         if localInput != None:
-            self.network.send({"type":"input","keys":list(localInput.keys),"mouse":list(localInput.mousePos)})
-        snapshot = None
+            self.network.send({"type":"input",
+                               "keys":list(localInput.keys),
+                               "mouse":list(localInput.mousePos),
+                               "events":inputManager.serializeEvents(localInput.pendingEvents())})
         while not self.network.messages.empty():
             message = self.network.messages.get()
-            if message["type"] == "welcome":
+            messageType = message.get("type")
+            if messageType == "welcome":
                 oldManager = self.inputMangers.pop(self.userID,None)
                 self.userID = message["clientID"]
                 self.inputMangers[self.userID] = oldManager if oldManager != None else inputManager.InputManager()
-            elif message["type"] == "snapshot":
-                snapshot = message
-        if snapshot != None:
-            self.applySnapshot(snapshot)
+            elif messageType == "delta":
+                self.applyDelta(message)
+            elif messageType == "custom":
+                self.addEvent(self.networkMessageEventTemplate(None,message["data"]))
         self.clientUpdate()

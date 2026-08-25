@@ -8,35 +8,70 @@ import pygame
 import data.core
 
 core = data.core.Core()
-# the client renders the host's world; local sprites get replaced by snapshots
-assert core.join("127.0.0.1", 5599)
+assert core.join("127.0.0.1", 5599, identity="testclient")
 
 def cycle():
     pygame.event.pump()
     core.clientNetworkUpdate()
     core.clearEvents()
     core.endCycle()
+    time.sleep(0.02)
 
-# wait for welcome + first snapshot
-deadline = time.time() + 5
-while time.time() < deadline and core.userID == "main":
-    cycle(); time.sleep(0.02)
-assert core.userID.startswith("client"), "welcome should assign a client id"
+def waitFor(check, why, seconds=6, poke=None):
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if poke != None:
+            poke()
+        cycle()
+        if check():
+            return
+    assert False, why
 
-deadline = time.time() + 5
-while time.time() < deadline and core.getObject(core.userID) == None:
-    cycle(); time.sleep(0.02)
-player = core.getObject(core.userID)
-assert player != None, "snapshot should create the client's player sprite"
+# identity handshake: the persistent identity becomes the client id
+waitFor(lambda: core.userID == "testclient", "welcome should adopt the client identity")
 
-startX = player.rect.x
-localInput = core.getInputManager(core.userID)
-deadline = time.time() + 5
-while time.time() < deadline:
-    localInput.keys = {"d"}          # simulate holding right
-    cycle(); time.sleep(0.02)
-    player = core.getObject(core.userID)
-    if player != None and player.rect.x > startX:
-        break
-assert player.rect.x > startX, f"held key should move player (x stayed {player.rect.x})"
+# delta create: the host spawns our player and streams it over
+waitFor(lambda: core.getObject("testclient") != None, "delta should create the client's player sprite")
+
+# the visibility filter must keep 'secret' off this client
+assert core.getObject("secret") == None, "filtered sprite leaked to the client"
+
+# delta update: held key moves the player on the host, change streams back
+startX = core.getObject("testclient").rect.x
+localInput = core.getInputManager("testclient")
+waitFor(lambda: core.getObject("testclient").rect.x > startX,
+        "held key should move player",
+        poke=lambda: setattr(localInput,"keys",{"d"}))
+localInput.keys = set()
+
+# discrete event transport: a KEYDOWN travels to the host's input manager
+waitFor(lambda: core.getObject("testclient-mark") != None,
+        "KEYDOWN 'e' should make the host spawn a marker",
+        poke=lambda: localInput.addEvent(pygame.event.Event(pygame.KEYDOWN,key=pygame.K_e,mod=0,unicode="e")))
+
+# custom messages: ping to the host package, pong comes back
+gotPong = []
+def checkPong():
+    for event in core.getEventList("networkMessage"):
+        if isinstance(event.data,dict) and event.data.get("kind") == "pong":
+            gotPong.append(True)
+    return bool(gotPong)
+waitFor(checkPong, "ping should be answered with pong",
+        poke=lambda: core.send({"kind":"ping"}))
+
+# delta remove: host despawns the marker, removal streams back
+waitFor(lambda: core.getObject("testclient-mark") == None,
+        "despawn should remove the marker on the client",
+        poke=lambda: core.send({"kind":"despawn-mark"}))
+
+# reconnect: same identity resumes the same player after a drop
+core.network.close()
+assert core.join("127.0.0.1", 5599, identity="testclient")
+startX = core.getObject("testclient").rect.x
+localInput = core.getInputManager("testclient")
+waitFor(lambda: core.getObject("testclient").rect.x > startX,
+        "player should still respond after reconnecting with the same identity",
+        poke=lambda: setattr(localInput,"keys",{"d"}))
+
+assert core.getObject("secret") == None, "filtered sprite leaked to the client"
 print("online OK", flush=True)

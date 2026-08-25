@@ -1,5 +1,51 @@
 import pygame
 from data.system.events import EventManager
+# discrete events allowed on the wire, with the attributes that survive serialization
+WIRE_EVENTS = {
+    pygame.KEYDOWN: ("key","mod","unicode"),
+    pygame.KEYUP: ("key","mod"),
+    pygame.MOUSEBUTTONDOWN: ("button","pos"),
+    pygame.MOUSEBUTTONUP: ("button","pos"),
+    pygame.MOUSEWHEEL: ("x","y","flipped"),
+}
+
+def serializeEvents(events) -> list[dict]:
+    payload = []
+    for event in events:
+        fields = WIRE_EVENTS.get(event.type)
+        if fields == None:
+            continue
+        entry = {"type": event.type}
+        for field in fields:
+            value = getattr(event, field, None)
+            entry[field] = list(value) if isinstance(value, tuple) else value
+        payload.append(entry)
+    return payload
+
+def deserializeEvents(payload) -> list[pygame.event.Event]:
+    events = []
+    if not isinstance(payload,list):
+        return events
+    for entry in payload:
+        if not isinstance(entry,dict):
+            continue
+        fields = WIRE_EVENTS.get(entry.get("type"))
+        if fields == None:
+            continue
+        attrs = {}
+        for field in fields:
+            value = entry.get(field)
+            if field == "pos":
+                attrs[field] = tuple(value) if isinstance(value,list) and len(value) == 2 else (0,0)
+            elif field == "unicode":
+                attrs[field] = value if isinstance(value,str) else ""
+            elif field == "flipped":
+                attrs[field] = bool(value)
+            else:
+                attrs[field] = value if type(value) == int else 0
+        events.append(pygame.event.Event(entry["type"],attrs))
+    return events
+
 class InputManager(EventManager):
     def __init__(self):
         super().__init__()
@@ -60,7 +106,7 @@ class InputManager(EventManager):
 
     @staticmethod
     def getKey(key):
-        return getattr(pygame,f"K_{key.upper if len(key)>1 else key}")
+        return getattr(pygame,f"K_{key.upper() if len(key)>1 else key}")
 
     def setRawInput(self,rawEvents,rawKeys,mousePos):
         self.convertEventList(rawEvents)
@@ -71,6 +117,12 @@ class InputManager(EventManager):
         self.convertEventList(events)
         self.keys = set(keys)
         self.mousePos = tuple(mousePos)
+
+    def pendingEvents(self) -> list:
+        pending = []
+        for eventList in self.nextEvents.values():
+            pending.extend(eventList)
+        return pending
     
     def mouseClicked(self,right=False):
         for event in self.getEventList(pygame.MOUSEBUTTONDOWN):
