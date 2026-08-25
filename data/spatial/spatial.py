@@ -87,14 +87,10 @@ class Spatial(Runnable):
         return self.pos[2]
     @ x.setter
     def x(self,x:int) -> None:
-        self.pos = (x,)+(self.y,)+(self.dimension,)
-        self.objectData.hitbox.updateRect(self.rect, self.pos)
-        self.addEvent(self.moveEventTemplate(self.id))
+        self.pos = (x,self.y,self.dimension)
     @ y.setter
     def y(self,y:int) -> None:
-        self.pos = (self.x,)+(y,)+(self.dimension,)
-        self.objectData.hitbox.updateRect(self.rect, self.pos)
-        self.addEvent(self.moveEventTemplate(self.id))
+        self.pos = (self.x,y,self.dimension)
     
     @ axis.setter
     def axis(self,axis:tuple[int,int]) -> None:
@@ -104,12 +100,14 @@ class Spatial(Runnable):
     @ pos.setter
     def pos(self,pos:tuple[int,int,str]) -> None:
         self._pos = pos
-        
+        rect = getattr(self,"rect",None)
+        if rect != None:
+            self.objectData.hitbox.updateRect(rect,pos)
+            self.addEvent(self.moveEventTemplate(self.id))
+
     @ dimension.setter
     def dimension(self,dimension:str) -> None:
         self.pos = self.axis+(dimension,)
-        self.rect.dimension = dimension
-        self.addEvent(self.moveEventTemplate(self.id))
 
     @ staticmethod
     def convertAngleToDirection(angle) -> tuple[float,float]:

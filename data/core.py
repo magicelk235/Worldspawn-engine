@@ -1,5 +1,6 @@
 
-import pygame,enum,uuid
+import pygame,enum,uuid,json,os
+import yaml
 pygame.init()
 from data.system.api import Api
 from data.system import events, errors, network
@@ -64,6 +65,7 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
         self.userID = "main"
         self.mode = self.Mode.start
         self.network = None
+        self.bannedPlayers = set()
         self.addInputManager(self.userID)
         # pygame.display.set_caption(f"WorldSpawn Code:{self.ip}")
         # pygame.display.set_icon(pygame.image.load(default.resource_path("assets/gui/world_icon.png")))
@@ -172,6 +174,75 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
                 aliveObjects = aliveObjects | self.GroupsByBases[type]
         return aliveObjects
 
+    def spawnFromEntry(self,id:str,prefabPath:str,data:dict):
+        """Create a sprite from serialized form (network delta or saved world)."""
+        rect = data.get("rect")
+        if prefabPath == None or rect == None:
+            return None
+        try:
+            cls = self.getObjectByPrefabPath(prefabPath)
+        except (ValueError,KeyError):
+            cls = None
+        if cls == None:
+            return None
+        object = cls(self,(rect["x"],rect["y"],rect["dimension"]))
+        self.addObjectByID(object,id)
+        self.patchObject(object,data)
+        return object
+
+    def patchObject(self,object,data:dict) -> None:
+        data = dict(data)
+        currentAnimation = data.pop("currentAnimation",None)
+        rect = data.get("rect")
+        object.fromDict(data)
+        if rect != None:
+            object.pos = (rect["x"],rect["y"],rect["dimension"])
+        if currentAnimation != None:
+            object.loadAnimation(currentAnimation)
+
+    @staticmethod
+    def getWorldPath(name:str) -> str:
+        return f"save/{name}"
+
+    def saveWorld(self,name:str) -> None:
+        folder = self.getWorldPath(name)
+        os.makedirs(folder,exist_ok=True)
+        sprites = {}
+        for id,object in list(self.sprites.items()):
+            sprites[id] = {"prefabPath":object.prefabPath,"data":object.toSaveData()}
+        custom = {}
+        for packageName,package in self.packages.items():
+            saveState = getattr(package.core,"saveState",None)
+            if saveState != None:
+                custom[packageName] = saveState(self)
+        settings = {"name":name,"bannedPlayers":sorted(self.bannedPlayers),"custom":custom}
+        with open(f"{folder}/settings.yaml","w") as f:
+            yaml.safe_dump(settings,f)
+        with open(f"{folder}/sprites.json","w") as f:
+            json.dump(sprites,f)
+
+    def loadWorld(self,name:str) -> bool:
+        folder = self.getWorldPath(name)
+        try:
+            with open(f"{folder}/settings.yaml") as f:
+                settings = yaml.safe_load(f)
+            with open(f"{folder}/sprites.json") as f:
+                sprites = json.load(f)
+        except (OSError,ValueError,yaml.YAMLError):
+            self.raiseError("worldNotFound",f"no saved world named {name}")
+            return False
+        for id in list(self.sprites.keys()):
+            self.removeObjectByID(id)
+        for id,entry in sprites.items():
+            self.spawnFromEntry(id,entry.get("prefabPath"),dict(entry["data"]))
+        self.bannedPlayers = set(settings.get("bannedPlayers",[]))
+        custom = settings.get("custom",{})
+        for packageName,package in self.packages.items():
+            loadState = getattr(package.core,"loadState",None)
+            if loadState != None and packageName in custom:
+                loadState(self,custom[packageName])
+        return True
+
     def main(self):
         while self.running:
             self.getInput()
@@ -190,6 +261,8 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
                 self.clearEvents()
                 self.endCycle()
             pygame.time.wait(1)
+        if self.network != None:
+            self.network.close()
     
     def encryptIp(self,ip):
         cryptedIp = ""
@@ -203,25 +276,42 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
             ip += self.ipCryptKey[char]
         return ip
     
-    def host(self,port:int):
+    def host(self,port:int,password:str=None,sendRate:int=1):
         self.network = network.HostNetwork(port)
         self.clientIdentities = {}   # transport id -> stable client id
         self.clientTransports = {}   # stable client id -> transport id
         self.clientMirrors = {}      # stable client id -> last data sent per sprite
+        self.hostPassword = password
+        self.sendRate = max(1,sendRate)
         self.mode = self.Mode.host
         pygame.display.set_caption("WorldSpawn - hosting")
 
-    def join(self,ip:str,port:int,identity:str=None) -> bool:
+    def join(self,ip:str,port:int,identity:str=None,password:str=None) -> bool:
         try:
             self.network = network.ClientNetwork(ip,port)
         except OSError as e:
             self.raiseError("connectionFailed",str(e))
             return False
         self.identity = identity if identity != None else uuid.uuid4().hex
-        self.network.send({"type":"hello","identity":self.identity})
+        self.network.send({"type":"hello","identity":self.identity,"password":password})
         self.mode = self.Mode.join
         pygame.display.set_caption("WorldSpawn - client")
         return True
+
+    def rejectClient(self,transportID:str,reason:str) -> None:
+        self.network.sendTo(transportID,{"type":"rejected","reason":reason})
+        self.network.dropClient(transportID)
+
+    def kick(self,clientID:str) -> None:
+        transportID = self.clientTransports.get(clientID)
+        if transportID != None:
+            self.network.sendTo(transportID,{"type":"rejected","reason":"kicked"})
+            self.network.dropClient(transportID)
+            self.detachClient(transportID)
+
+    def ban(self,clientID:str) -> None:
+        self.bannedPlayers.add(clientID)
+        self.kick(clientID)
 
     def send(self,data,clientID:str=None) -> None:
         """Send a package-defined message. Client -> host, or host -> one/all clients."""
@@ -300,24 +390,10 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
                 self.removeObjectByID(id)
         for id,entry in message["changed"].items():
             object = self.getObject(id)
-            data = dict(entry["data"])
             if object == None:
-                prefabPath = entry.get("prefabPath")
-                rect = data.get("rect")
-                if prefabPath == None or rect == None:
-                    continue
-                cls = self.getObjectByPrefabPath(prefabPath)
-                if cls == None:
-                    continue
-                object = cls(self,(rect["x"],rect["y"],rect["dimension"]))
-                self.addObjectByID(object,id)
-            currentAnimation = data.pop("currentAnimation",None)
-            rect = data.get("rect")
-            object.fromDict(data)
-            if rect != None:
-                object.pos = (rect["x"],rect["y"],rect["dimension"])
-            if currentAnimation != None:
-                object.loadAnimation(currentAnimation)
+                self.spawnFromEntry(id,entry.get("prefabPath"),entry["data"])
+            else:
+                self.patchObject(object,entry["data"])
 
     def hostUpdate(self):
         while not self.network.messages.empty():
@@ -325,7 +401,13 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
             messageType = message.get("type")
             if messageType == "hello":
                 identity = message.get("identity")
-                self.attachClient(transportID,str(identity) if identity != None else transportID)
+                clientID = str(identity) if identity != None else transportID
+                if clientID in self.bannedPlayers:
+                    self.rejectClient(transportID,"banned")
+                elif self.hostPassword != None and message.get("password") != self.hostPassword:
+                    self.rejectClient(transportID,"wrong password")
+                else:
+                    self.attachClient(transportID,clientID)
             elif messageType == "disconnected":
                 self.detachClient(transportID)
             elif messageType == "input":
@@ -338,7 +420,8 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
                 if clientID != None:
                     self.addEvent(self.networkMessageEventTemplate(clientID,message["data"]))
         self.serverUpdate()
-        self.syncClients()
+        if self.cycles % self.sendRate == 0:
+            self.syncClients()
 
     def clientNetworkUpdate(self):
         if not self.network.connected:
@@ -346,12 +429,6 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
             self.network = None
             self.setStartMode()
             return
-        localInput = self.inputMangers.get(self.userID)
-        if localInput != None:
-            self.network.send({"type":"input",
-                               "keys":list(localInput.keys),
-                               "mouse":list(localInput.mousePos),
-                               "events":inputManager.serializeEvents(localInput.pendingEvents())})
         while not self.network.messages.empty():
             message = self.network.messages.get()
             messageType = message.get("type")
@@ -363,4 +440,16 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
                 self.applyDelta(message)
             elif messageType == "custom":
                 self.addEvent(self.networkMessageEventTemplate(None,message["data"]))
+            elif messageType == "rejected":
+                self.raiseError("joinRejected",message.get("reason","rejected"))
+                self.network.close()
+                self.network = None
+                self.setStartMode()
+                return
+        localInput = self.inputMangers.get(self.userID)
+        if localInput != None:
+            self.network.send({"type":"input",
+                               "keys":list(localInput.keys),
+                               "mouse":list(localInput.mousePos),
+                               "events":inputManager.serializeEvents(localInput.pendingEvents())})
         self.clientUpdate()

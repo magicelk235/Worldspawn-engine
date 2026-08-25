@@ -6,6 +6,10 @@ class MyClass:
     def clientInit(self):...
     def generalUpdate(self):...
     def clientUpdate(self):...
+    def saveState(self):
+        return {"counter":41}
+    def loadState(self,data):
+        self.restoredCounter = data["counter"]
     def serverUpdate(self):
         for event in self.getEventList("clientConnected"):
             if self.getObject(event.clientID) == None:
@@ -18,6 +22,10 @@ class MyClass:
             elif kind == "despawn-mark":
                 if self.getObject(f"{event.clientID}-mark") != None:
                     self.removeObjectByID(f"{event.clientID}-mark")
+            elif kind == "kick-me":
+                self.kick(event.clientID)
+            elif kind == "ban-me":
+                self.ban(event.clientID)
         for clientID in list(self.inputMangers.keys()):
             if clientID == self.userID:
                 continue

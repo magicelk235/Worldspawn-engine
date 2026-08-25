@@ -58,6 +58,7 @@ class SpriteData:
     hitbox:Hitbox = field(default_factory=lambda: Hitbox(1,1))
     animations:dict[str:Animation] = field(default_factory=dict)
     clientData:list = field(default_factory=list)
+    saveData:list = field(default_factory=list)
     displayByDirectionX:bool = True
     displayByDirectionY:bool = False
 
@@ -122,6 +123,9 @@ class Sprite(spatial.Spatial,pygame.sprite.Sprite,sendable.Sendable):
             
     def toData(self):
         return self.toDict(self.objectData.clientData)
+
+    def toSaveData(self):
+        return self.toDict(self.objectData.clientData + self.objectData.saveData)
 
     @ property
     def size(self) -> tuple[int,int]:
@@ -227,7 +231,15 @@ class Sprite(spatial.Spatial,pygame.sprite.Sprite,sendable.Sendable):
         return displayedPos
 
     def canDisplay(self,displaySurf,player,displayOffset) -> bool:
-        return self.isVisible()
+        if not self.isVisible():
+            return False
+        if self.rect.dimension != player.rect.dimension:
+            return False
+        view = displaySurf.get_rect()
+        view.topleft = (displayOffset.x,displayOffset.y)
+        # inflate the view by a screen so oversized images near the edge never pop
+        # out, and the sprite rect by a pixel so zero-size hitboxes still collide
+        return self.rect.rect.inflate(2,2).colliderect(view.inflate(view.w,view.h))
 
     def display(self,displaySurf,player,displayOffset) -> None:
         if self.canDisplay(displaySurf,player,displayOffset):

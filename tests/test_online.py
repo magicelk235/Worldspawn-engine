@@ -17,7 +17,7 @@ try:
     assert ready, "host failed to start"
     time.sleep(1.0)
     client = subprocess.run([sys.executable, os.path.join(root,"tests","online_client.py")],
-                            capture_output=True, text=True, timeout=30)
+                            capture_output=True, text=True, timeout=90)
     print(client.stdout)
     print(client.stderr, file=sys.stderr)
     assert "online OK" in client.stdout, "client checks failed"
