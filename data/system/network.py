@@ -2,6 +2,18 @@ import json, socket, struct, threading, queue
 
 MAX_MESSAGE_SIZE = 16 * 1024 * 1024  # refuse absurd length prefixes from bad peers
 
+def closeSocket(sock):
+    # shutdown wakes any thread blocked in recv and pushes the FIN out
+    # immediately; on Linux a bare close() can leave both hanging
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+    try:
+        sock.close()
+    except OSError:
+        pass
+
 def sendMessage(sock, data) -> None:
     payload = json.dumps(data).encode()
     sock.sendall(struct.pack(">I", len(payload)) + payload)
@@ -68,10 +80,7 @@ class HostNetwork:
         with self.lock:
             sock = self.clients.pop(clientID, None)
         if sock != None:
-            try:
-                sock.close()
-            except OSError:
-                pass
+            closeSocket(sock)
 
     def sendTo(self, clientID, data):
         with self.lock:
@@ -98,10 +107,7 @@ class HostNetwork:
             socks = list(self.clients.values())
             self.clients.clear()
         for sock in socks:
-            try:
-                sock.close()
-            except OSError:
-                pass
+            closeSocket(sock)
 
 class ClientNetwork:
     def __init__(self, ip:str, port:int):
@@ -129,8 +135,5 @@ class ClientNetwork:
             self.connected = False
 
     def close(self):
-        try:
-            self.sock.close()
-        except OSError:
-            pass
+        closeSocket(self.sock)
         self.connected = False
