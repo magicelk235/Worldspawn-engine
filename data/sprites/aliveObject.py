@@ -58,6 +58,7 @@ class AliveObject(Sprite):
 
     def __init__(self, core, pos: tuple[int,int,str],objectData,tag=None,dictData={}):
         super().__init__(core, pos,objectData)
+        self._health = 0
         self.resetModifiers()
         self.health = self.objectData.health
         self.tag = tag

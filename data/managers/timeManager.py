@@ -5,10 +5,12 @@ from pygame.time import set_timer
 class Timer:
     def __init__(self,core,countDown:int,repeat=False):
         self.core = core
-        self.countDown:int = countDown
         self.repeat = repeat
+        # both are read by the countDown setter through stop()/start(),
+        # so they have to exist before the countdown is assigned
         self.stopped = False
         self.stoppedCycle = 0
+        self.countDown:int = countDown
 
     def currentCycle(self) -> int:
         return self.core.cycles

@@ -34,6 +34,14 @@ class Api:
                 base = fileManager.getModule(f"{self.package.path}/{self.name}","base")
                 self.api.addGroup(self.name,base)
 
+        @ staticmethod
+        def buildStaticGetter(objName:str):
+            # bound through a factory: a closure over the loop variable would
+            # leave every getter pointing at the last prefab that was loaded
+            def f(self,name):
+                return self.getters[objName].get(name)
+            return f
+
         def createStaticGetter(self,package:"Api.Package"):
             if self.settings.get("create-static-getter",False):
                 for path in package.getPrefabs(self.name,True):
@@ -44,10 +52,7 @@ class Api:
                     loadedObjects = self.api.getters.get(objName,{})
                     objects = objects | loadedObjects
                     self.api.getters[objName] = objects
-                    def f(self,name):
-                        return self.getters[objName].get(name)
-                    print(objName)
-                    self.api.createFunction(f"get{objName.capitalize()}",f)
+                    self.api.createFunction(f"get{objName.capitalize()}",self.buildStaticGetter(objName))
                 
 
         def load(self):

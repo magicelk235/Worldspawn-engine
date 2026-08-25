@@ -129,12 +129,12 @@ class Sprite(spatial.Spatial,pygame.sprite.Sprite,sendable.Sendable):
 
     @ property
     def size(self) -> tuple[int,int]:
-        return self.rect.size()
+        return self.rect.size
 
     @ size.setter
     def size(self,size) -> None:
         self.objectData.hitbox.changeSize(*size)
-        self.rect.setSize(*size)
+        self.rect.size = size
         self.objectData.hitbox.updateRect(self.rect,self.pos)
 
     def getDirection(self) -> None:

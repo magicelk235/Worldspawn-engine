@@ -10,7 +10,6 @@ class UIObject(sprite.Sprite):
         self.uiParts:list["UIObject"] = []
         for part in self.uiParts:
             self.core.addObject(part)
-        self.renderOrder = 5
 
     def __del__(self):
         for part in self.uiParts:
@@ -80,7 +79,7 @@ class UIObject(sprite.Sprite):
         self.image.display(displaySurf,offset)
 
     def remove(self):
-        for part in self.uiParts:
+        for part in list(self.uiParts):
             self.removeUiPart(part)
 
 def getObject():

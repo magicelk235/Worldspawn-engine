@@ -26,6 +26,9 @@ class DisplayManager(pygame.sprite.Group):
 		self.screen = pygame.display.set_mode(self.size, pygame.SCALED | pygame.RESIZABLE)
 		self.displaySurface = pygame.display.get_surface()
 
+	def getSize(self):
+		return self.size
+
 	def removeObject(self,object):
 		self.remove(object)
 

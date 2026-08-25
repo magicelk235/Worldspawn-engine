@@ -2,7 +2,7 @@ import random
 from data.inventory import inventory
 from data.spatial import rect
 from data.sprites import aliveObject
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 @ dataclass
 class Lootable:
@@ -73,8 +73,8 @@ class Spawner:
 
 @ dataclass
 class NpcObjectData(aliveObject.AliveObjectData):
-	lootableList:list = []
-	spawners:list = []
+	lootableList:list = field(default_factory=list)
+	spawners:list = field(default_factory=list)
 
 class NpcObject(aliveObject.AliveObject):
 	def __init__(self, core, pos: tuple[int,int,str],objectData,tag=None,dictData={}):
