@@ -1,0 +1,11 @@
+sprites:
+  create-static-getter: true
+  create-dynamic-getter: true
+  # self(core),object,id
+  add-function: |
+    print(object)
+    super(Core,self).addObjectByID(object,id)
+  # self(core),object,id
+  remove-function: |
+    print(object)
+    super(Core,self).removeObjectByID(id)
