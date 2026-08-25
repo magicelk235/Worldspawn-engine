@@ -1,6 +1,6 @@
 # Worldspawn Engine
 
-Worldspawn™ Copyright 2025© — a project started 8th April 2024. Originally a sandbox game (now continued separately as Worldspawn-game), Worldspawn today is a 2D game engine built on Pygame. The engine handles the system work for you — image types, object lifecycle, camera centering, display order — everything is customizable and easy to use.
+A 2D game engine built on pygame. Worldspawn started in April 2024 as a sandbox game and slowly turned into the engine underneath it; the game itself now lives on separately as Worldspawn-game. The engine takes care of images, object lifecycle, the camera, draw order, input, saving, and online play. Your game goes in a package.
 
 ## Setup
 
@@ -9,29 +9,41 @@ pip install -r requirements.txt
 python main.py
 ```
 
-## Features
+## What you get
 
-- **Sprites & animations** — data-driven images (`ImageData`), gif animations via gif_pygame, weighted animation transitions with countdown timers
-- **Movement** — time-based direction vectors that auto-merge opposites
-- **Events** — custom event registration on top of Pygame's event system; errors are events too (`core.raiseError(name, message, fatal=False)`)
-- **Packages** — modular game content under `packages/`, each with `settings.yaml`, `domains.yaml`, and a core extension (see the package API below)
-- **Saved worlds** — `core.saveWorld(name)` / `core.loadWorld(name)` write a world folder under `save/` (sprites as JSON, settings as YAML, banned players included); packages persist their own state through optional `saveState`/`loadState` hooks
-- **Rendering** — camera follows the player, render-order layering with y-sorting, and automatic culling of sprites that are offscreen or in another dimension
-- **Online play (v3)** — a host runs the world, clients join it:
+- Sprites and animations: data-driven images, gif animations through gif_pygame, weighted animation transitions with countdown timers
+- Movement: time-based direction vectors that merge opposite directions automatically
+- Events: register your own events on top of pygame's. Errors are events too, raised with `core.raiseError(name, message, fatal=False)`
+- Saved worlds: `core.saveWorld(name)` and `core.loadWorld(name)` write a world folder under `save/`, sprites as JSON and settings as YAML, ban list included. Packages can persist their own state with `saveState`/`loadState` hooks
+- Rendering: the camera follows the player, sprites draw in layers with y-sorting, and anything offscreen or in another dimension gets culled
+
+## Online play
+
+A host runs the world and clients join it:
 
 ```python
-core.host(5599, password="hunter2", sendRate=2)    # host: optional password, sync every 2nd cycle
+core.host(5599, password="hunter2", sendRate=2)
 core.join("192.168.1.10", 5599, identity=myId, password="hunter2")
 ```
 
-The host streams per-client delta snapshots: only changed sprite fields travel, and a missing id means the sprite is gone. What each client sees is decided by `filterVisible(clientID, sprites)`, which packages can replace (`core.createFunction("filterVisible", fn)`) for distance or dimension culling. Clients send held keys, mouse position, and discrete events (key presses, mouse buttons, wheel); the host feeds them into a per-client `InputManager`. Packages exchange their own messages with `core.send(data, clientID=None)` and read them from the `networkMessage` event.
+The host streams per-client delta snapshots. Only changed sprite fields travel, and a missing id means the sprite is gone. Which sprites a client sees is decided by `filterVisible(clientID, sprites)`; packages can replace it through `core.createFunction("filterVisible", fn)` to cull by distance or dimension. Clients send held keys, the mouse position, and discrete events (key presses, mouse buttons, wheel), which the host feeds into a per-client `InputManager`. For everything else there is `core.send(data, clientID=None)`, delivered on the other side as a `networkMessage` event.
 
-The wire format is JSON over length-prefixed TCP. Hosts can require a password and can `core.kick(clientID)` or `core.ban(clientID)` players; bans persist with the saved world. There is no encryption — play on networks you trust.
+Identity is a string you pass to `join`. It becomes the client id and survives reconnects, so a player who drops can come back as themselves. Hosts can require a password, `core.kick(clientID)`, or `core.ban(clientID)`; bans persist with the saved world. The wire format is JSON over length-prefixed TCP. There is no encryption, so only play on networks you trust.
 
-## Checks
+## Packages
 
-Every push runs the suite on GitHub Actions. Locally they are plain scripts (headless — no window will open):
+Game content lives in `packages/<name>/` with three parts: `settings.yaml` (name, dependencies, used domains), `domains.yaml` (which sprite groups exist), and `core.py`, a class that gets grafted onto the engine core. That class can define lifecycle hooks (`serverUpdate`, `clientUpdate`, `saveState`, `loadState`) and react to events like `clientConnected` or `networkMessage`. The committed `packages/package/` is a small working example that the test suite runs against.
+
+## Tests
+
+Plain scripts, no framework. They run headless, so no window will open or steal focus:
 
 ```bash
 for t in tests/test_*.py; do python "$t"; done
 ```
+
+GitHub Actions runs the same suite on every push.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
