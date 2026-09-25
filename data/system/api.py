@@ -46,11 +46,14 @@ class Api:
             if self.settings.get("create-static-getter",False):
                 for path in package.getPrefabs(self.name,True):
                     objects = {}
-                    for file in fileManager.getFiles(path,True):
+                    for file in fileManager.getFiles(path,True,extensions={".py"}):
                         objects[file] = fileManager.getModule(path,file)
                     objName:str = path.split("/")[-1]
                     loadedObjects = self.api.getters.get(objName,{})
-                    objects = objects | loadedObjects
+                    # dependencies load first, so anything already registered
+                    # belongs to a package this one builds on: the later
+                    # package wins and may specialise inherited content
+                    objects = loadedObjects | objects
                     self.api.getters[objName] = objects
                     self.api.createFunction(f"get{objName.capitalize()}",self.buildStaticGetter(objName))
                 
@@ -151,8 +154,10 @@ class Api:
 
     def loadPackagesIfNeeded(self) -> None:
         packages = fileManager.getFolders("packages")
-        print(packages)
         packagesSettings = [self.getPackageSettings(package) for package in packages]
         for settings in packagesSettings:
-            if settings["always-enabled"]:
+            # a package pulled in as somebody else's dependency is already
+            # loaded; loading it again would re-run its core extension and
+            # let it overwrite content the package that depends on it added
+            if settings["always-enabled"] and not self.isPackageLoaded(settings["name"]):
                 self.loadPackage(settings["name"])

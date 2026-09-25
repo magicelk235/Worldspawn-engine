@@ -1,6 +1,9 @@
-import os, sys, time
-root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0,root); os.chdir(root)
+import sys
+
+sys.path.insert(0, __file__.rsplit("/", 1)[0])
+import harness
+
+ROOT = harness.buildRoot()
 
 from data.system.network import HostNetwork, ClientNetwork
 

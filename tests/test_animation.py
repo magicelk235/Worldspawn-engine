@@ -1,8 +1,11 @@
-import os, sys, time
-os.environ.setdefault("SDL_VIDEODRIVER","dummy")
-os.environ.setdefault("SDL_AUDIODRIVER","dummy")
-root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0,root); os.chdir(root)
+import os
+import sys
+import time
+
+sys.path.insert(0, __file__.rsplit("/", 1)[0])
+import harness
+
+ROOT = harness.buildRoot()
 
 from PIL import Image as PILImage
 gifDir = "packages/package/assets/textures"

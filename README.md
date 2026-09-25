@@ -32,7 +32,9 @@ Identity is a string you pass to `join`. It becomes the client id and survives r
 
 ## Packages
 
-Game content lives in `packages/<name>/` with three parts: `settings.yaml` (name, dependencies, used domains), `domains.yaml` (which sprite groups exist), and `core.py`, a class that gets grafted onto the engine core. That class can define lifecycle hooks (`serverUpdate`, `clientUpdate`, `saveState`, `loadState`) and react to events like `clientConnected` or `networkMessage`. The committed `packages/package/` is a small working example that the test suite runs against.
+Game content lives in `packages/<name>/` with three parts: `settings.yaml` (name, dependencies, used domains), `domains.yaml` (which sprite groups exist), and `core.py`, a class that gets grafted onto the engine core. That class can define lifecycle hooks (`serverUpdate`, `clientUpdate`, `saveState`, `loadState`) and react to events like `clientConnected` or `networkMessage`. A package that lists another in `dependencies` loads after it and may override the content it registers, so a game can specialise what the package it builds on provides.
+
+Nothing is committed under `packages/`, because anything sitting there loads into every world. The small example the checks run against lives in `tests/fixtures/package` and is copied into a temporary root for the duration of a check.
 
 ## Tests
 

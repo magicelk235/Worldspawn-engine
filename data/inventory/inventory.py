@@ -102,10 +102,16 @@ class InventoryItem:
 class Inventory:
 	def __init__(self,w,h,owner):
 		self.inventory:list[list[InventoryItem]] = [[InventoryItem(count=0) for i in range(w)]for j in range(h)]
+		# handed out by toList(); the same list object is kept and refilled so
+		# a widget holding it keeps seeing the current slots
 		self.copyListInventory:list[InventoryItem] = self.toRawList()
-		self.size = (w,h)
+		self._size = (w,h)
 		self.owner = owner
-		self.handPos = (4,4)
+		# first cell of the first row. Legacy drew its hotbar from the last
+		# row and held the hand there; here row zero is the hotbar, so a hand
+		# anywhere else is a slot the hotbar never shows and the held item
+		# would be one the player cannot see or select
+		self.handPos = (0,0)
 		self.clearInventory()
 
 	@ property
@@ -124,13 +130,50 @@ class Inventory:
 	def width(self, width):
 		self.size = (width,self.size[1])
 
+	@ property
+	def handPos(self):
+		return self._handPos
+	@handPos.setter
+	def handPos(self,value:tuple[int,int]):
+		# the hand is a slot, so it has to name one that exists. A saved
+		# world, a client delta or a grid that shrank can all offer a cell
+		# past the edge, and every read of the hand goes through getItem
+		w,h = self.size
+		self._handPos = (min(max(int(value[0]),0),w-1),min(max(int(value[1]),0),h-1))
+
 
 	@ property
 	def size(self):
 		return self._size
 	@size.setter
 	def size(self, value:tuple[int,int]):
-		self._size = value
+		w,h = value[0],value[1]
+		if getattr(self,"_size",None) == (w,h):
+			return
+		self._size = (w,h)
+		self.reshape(w,h)
+
+	def reshape(self,w,h) -> None:
+		"""Grow or shrink the grid, keeping whatever still fits."""
+		rows = []
+		for y in range(h):
+			row = []
+			for x in range(w):
+				if y < len(self.inventory) and x < len(self.inventory[y]):
+					row.append(self.inventory[y][x])
+				else:
+					row.append(InventoryItem(count=0))
+			rows.append(row)
+		self.inventory = rows
+		self.refreshList()
+		self.handPos = self.handPos
+		owner = getattr(self,"owner",None)
+		if owner != None:
+			for y in range(h):
+				for x in range(w):
+					if self.getItem(x,y).getItem() == None:
+						self.clearItem(x,y)
+			self.applyModifiers()
 
 
 	# getters
@@ -167,7 +210,7 @@ class Inventory:
 	def canAddItemAt(self,w,h,item):
 		if not self.getItem(w,h).sameItemType(item):
 			return False
-		return self.getItem(w,h).canAddCount(item.GetCount())
+		return self.getItem(w,h).canAddCount(item.getCount())
 
 	def addItemByCount(self,item,count):
 		return self.addItem(InventoryItem(item,count))
@@ -201,11 +244,11 @@ class Inventory:
 		self.applyModifiers()
 
 	def removeItem(self, name):
-		try:
-			self.removeAt(self.findItem(name))
-			return True
-		except:
+		pos = self.findItem(name)
+		if pos == None:
 			return False
+		self.removeAt(*pos)
+		return True
 
 	def hasItemAt(self,w,h,name,count=-1):
 		return self.getItem(w,h).sameName(name) and (count == -1 or self.getItem(w,h).canDecCount(count))
@@ -217,15 +260,24 @@ class Inventory:
 					return True
 		return False
 
-	def hasItemInHand(self, name, count=None):
+	def hasItemInHand(self, name, count=-1):
 		return self.hasItemAt(*self.handPos,name,count)
 
 	def update(self):
+		self.applyModifiers()
+
+	def dropSpentStacks(self) -> None:
+		"""Empty out any slot whose last item was used up.
+
+		A slot that ran to zero still names what used to be in it, so it
+		keeps answering hasItem, keeps being what the hand holds, and keeps
+		handing its modifiers to the owner. Every caller that spends an item
+		rebuilds the stats afterwards, so that is where the sweep belongs.
+		"""
 		for row in self.inventory:
 			for item in row:
 				if item.needsToBeEmpty():
 					item.clear(self.owner.core)
-		self.applyModifiers()
 
 	def clearItem(self,w,h):
 		self.getItem(w,h).clear(self.owner.core)
@@ -241,11 +293,15 @@ class Inventory:
 		for row in self.inventory:
 			itemList = itemList + row
 		return itemList
-	
+
+	def refreshList(self) -> None:
+		self.copyListInventory[:] = self.toRawList()
+
 	def toList(self):
 		return self.copyListInventory
 	# modifiers
 	def applyModifiers(self):
+		self.dropSpentStacks()
 		self.owner.resetModifiers()
 		self.getHandItem().applyModifiers(self.owner,True)
 		usedNames = set()
@@ -254,6 +310,9 @@ class Inventory:
 				if item.getItemName() not in usedNames:
 					usedNames.add(item.getItemName())
 					item.applyModifiers(self.owner)
+		# timed effects go on top of the items, the way legacy ordered it:
+		# an item that sets a stat outright must not wipe a live effect
+		self.owner.applyTimedModifiers()
 
 
 	# interaction
@@ -262,6 +321,9 @@ class Inventory:
 			return
 		if not self.getItem(w1,h1).merge(self.getItem(w2,h2),self.owner.core):
 			self.getItem(w1,h1).replace(self.getItem(w2,h2))
+		# either slot can be the hand, so the stat block has to follow the
+		# move the same way it follows an add or a remove
+		self.applyModifiers()
 
 
 
@@ -269,15 +331,52 @@ class Inventory:
 
 	def copy(self,other):
 		self.inventory = other.inventory
-		self.w = other.w
-		self.h = other.h
+		self.refreshList()
+		self._size = other.size
 		self.owner = other.owner
-		self.handPos =  other.handPos
+		self.handPos = other.handPos
+
+	# serialization: Sendable picks these up for anything that lists
+	# "inventory" in its client or save data
+	def toDict(self):
+		return {"size":list(self.size),
+				"handPos":list(self.handPos),
+				"items":[[[item.getItemName(),item.getCount()] for item in row]
+						 for row in self.inventory]}
+
+	def fromDict(self,data):
+		rows = data.get("items")
+		if rows == None:
+			return
+		size = data.get("size")
+		if size != None:
+			self.size = (size[0],size[1])
+		handPos = data.get("handPos")
+		if handPos != None:
+			self.handPos = (handPos[0],handPos[1])
+		core = self.owner.core
+		# the slots themselves are reused: widgets were handed these objects
+		# by toList() and would otherwise keep showing the pre-load contents
+		self.clearInventory()
+		for h,row in enumerate(rows):
+			if h >= self.getH():
+				break
+			for w,entry in enumerate(row):
+				if w >= self.getW():
+					break
+				name,count = entry[0],entry[1]
+				itemClass = core.getItems(name)
+				if itemClass == None or count <= 0:
+					continue
+				slot = self.getItem(w,h)
+				slot.item = itemClass()
+				slot.count = count
+		self.refreshList()
+		self.applyModifiers()
 
 	def drop(self,w,h):
 		if not self.getItem(w,h).isEmpty():
 			self.removeAt(w,h)
-			self.applyModifiers()
 
 	def convertToDrops(self):
 		for w in range(self.getW()):

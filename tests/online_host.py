@@ -1,8 +1,10 @@
-import os, sys, threading
-os.environ.setdefault("SDL_VIDEODRIVER","dummy")
-os.environ.setdefault("SDL_AUDIODRIVER","dummy")
-root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0,root); os.chdir(root)
+import threading
+import sys
+
+sys.path.insert(0, __file__.rsplit("/", 1)[0])
+import harness
+
+ROOT = harness.buildRoot()
 
 import data.core
 core = data.core.Core()
@@ -14,6 +16,10 @@ def filterVisible(self,clientID,sprites):
     return {id:obj for id,obj in sprites.items() if id != "secret"}
 core.createFunction("filterVisible",filterVisible)
 
-threading.Timer(60.0, lambda: setattr(core,"running",False)).start()
+# has to outlive the client subprocess, which test_online gives 90 seconds and
+# which spends up to 6 seconds on each of its waits. A host that shuts down
+# mid run closes the socket and fails whichever wait happens to be open, which
+# looks like a networking bug rather than a busy machine.
+threading.Timer(150.0, lambda: setattr(core,"running",False)).start()
 print("HOST READY", flush=True)
 core.main()

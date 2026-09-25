@@ -23,13 +23,27 @@ def getFolders(path,fullPath=False):
     if fullPath:
         return folders
     else:
-        print(folders)
-        print([removeFullPath(path,p) for p in folders])
         return [removeFullPath(path,p) for p in folders]
 
-def getFiles(path,removeEnd=False,fullPath=False):
+def getFiles(path,removeEnd=False,fullPath=False,extensions=None):
+    """List the files in a folder.
+
+    removeEnd drops the extension, and only the extension: cutting at the
+    first dot breaks on any folder above the package that has one in its
+    name. extensions filters, so a stray .DS_Store next to the sources is
+    not mistaken for content.
+    """
     pathObj = pathlib.Path(path)
-    files = [str(p).split(".")[0].replace("\\","/") if removeEnd else str(p).replace("\\","/") for p in pathObj.iterdir() if p.is_file()]
+    files = []
+    for p in pathObj.iterdir():
+        if not p.is_file():
+            continue
+        if extensions != None and p.suffix.lower() not in extensions:
+            continue
+        name = str(p).replace("\\","/")
+        if removeEnd:
+            name = name[:len(name)-len(p.suffix)]
+        files.append(name)
     if fullPath:
         return files
     else:

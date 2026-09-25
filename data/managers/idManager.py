@@ -10,7 +10,6 @@ class IDManager:
 	def generateID(self) -> str:
 		while True:
 			id = str(uuid4())
-			print(id)
 			if not self.idUsed(id):
 				return id
 		
@@ -34,5 +33,7 @@ class IDManager:
 		self.removeObjectByID(object.id)
 		
 	def removeObjectByID(self,id) -> None:
-		self.usedIDs.remove(id)
-		self.group.pop(id)
+		# removing twice is normal: an object can be dropped by its owner and
+		# by whatever else was holding its id in the same cycle
+		self.usedIDs.discard(id)
+		self.group.pop(id,None)

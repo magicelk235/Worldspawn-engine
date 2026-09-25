@@ -16,7 +16,20 @@ class ImageData(AttributeAccessor):
 	factoredSize:int = 1
 	renderOrder:int = 4
 	text:str = None
+	# point size for text mode; -1 leaves the font at its own default
+	fontSize:int = -1
 	resetGif:bool = True
+
+	def __post_init__(self):
+		# This is the key the image cache is stored under, so it has to stay
+		# hashable. Sizes and colours are tuples everywhere in the engine, but
+		# JSON has no tuple: anything that has been through a save file or a
+		# host's delta arrives as a list and would make the whole record
+		# unhashable, taking the sprite down with it.
+		for field in ("scaleSize","cutSize","color"):
+			value = getattr(self,field)
+			if isinstance(value,list):
+				object.__setattr__(self,field,tuple(value))
 
 	def toDict(self) -> dict[str,any]:
 		return dict(self.__dict__)
@@ -26,44 +39,93 @@ class ImageData(AttributeAccessor):
 			image.setAttr(key, self.__dict__[key])
 
 class Image(AttributeAccessor):
+	# every distinct look ever rendered used to stay here forever. A label
+	# that shows a number makes a new one every time the number changes, so
+	# the clock, the coordinates and every stack count leaked a surface per
+	# update. Kept as a least recently used cache instead: world textures are
+	# asked for on every frame and stay, one-off text falls out.
 	_cache = {}
-	def __init__(self,imageData:ImageData):
+	_cacheLimit = 2048
+	_keyFields = ("path","text","fontSize","scaleSize","cutSize","flipX","flipY",
+				  "color","angle","factoredSize")
+	def __init__(self,imageData:ImageData,owner=None):
 		self.oldPath:str = None
 		self.textMode:bool = False
 		self.image:GIFPygame = None
+		# whoever the image belongs to, so image data can point at one of its
+		# attributes with "@name" and follow it: "@directionX.value" mirrors
+		# the frame as the sprite turns around
+		self.owner = owner
 		self.setImageData(imageData)
 
 	@ property
 	def size(self):
 		return self.getRawImage().get_size()
 
+	@ staticmethod
+	def measure(imageData:"ImageData") -> tuple[int,int]:
+		"""Size the art in this data will cover, before any sprite owns it.
+
+		A widget has to build its hitbox before the sprite exists, and the
+		hitbox is what gets clicked, so it has to agree with the pixels. Fields
+		that follow an owner attribute ("@name") have nobody to follow from
+		here and measure at the value the field declares.
+		"""
+		return Image(imageData).size
+
 	def setImageData(self,imageData:ImageData):
 		self.imageData = imageData
 		self.loadImage()
 
-	def toDict(self):
-		return self.imageData.toDict()|{"image.frame":self.image.frame}
+	def resolveDynamicFields(self):
+		for key,value in self.imageData.__dict__.items():
+			if type(value) != str or not value.startswith("@"):
+				continue
+			# with no owner there is nothing to follow, and the name would
+			# reach the transforms as a piece of text. Measuring happens
+			# before a sprite owns its data, so this is a normal state rather
+			# than a broken one: fall back on what the field declares.
+			if self.owner == None:
+				fields = type(self.imageData).__dataclass_fields__
+				self.setAttr(key,fields[key].default)
+			else:
+				self.setAttr(key,self.owner.getAttr(value[1:]))
 
-	def toHash(self):
-		return str(self.toDict())
+	def toDict(self):
+		data = self.imageData.toDict()
+		for key,value in list(data.items()):
+			if type(value) == str and value.startswith("@"):
+				data[key] = self.getAttr(key)
+		return data|{"image.frame":self.image.frame}
+
+	def cacheKey(self):
+		# a tuple of the fields that decide the pixels; building and hashing
+		# one is a fraction of the cost of stringifying a dict, and this runs
+		# twice per sprite per frame
+		return tuple(getattr(self,field) for field in self._keyFields) + (self.image.frame,)
 
 	def loadImage(self):
 		self.imageData.load(self)
+		self.resolveDynamicFields()
 		self.textMode = self.text != None
 		if self.textMode or self.image == None or self.path != self.oldPath:
 			self.image = GIFPygame(self.frames)
 			self.oldPath = self.path
-		if self.cutSize == -1:
-			self.cutSize = self.image.get_size()
 		if self.scaleSize == -1:
 			self.scaleSize = self.image.get_size()
+		if self.cutSize == -1:
+			# no cut asked for: match whatever the scale produced, so cutting
+			# stays opt-in. Defaulting to the raw size instead would tile a
+			# scaled down texture back up to the size of its own file.
+			self.cutSize = self.scaleSize
 
 	@ property
 	def frames(self):
 		if self.textMode:
 			font = AssetsLoader.get("fonts",self.path)
-			image = font.render(str(self.text),True,(255,255,255))
-			return [[image,1]]
+			# rendered white so the colour field can tint it like any other
+			# texture, in the one place colour is applied
+			return [[font.render(self.text,self.fontSize),1]]
 		return AssetsLoader.get("textures",self.path)
 
 	@ property
@@ -78,8 +140,11 @@ class Image(AttributeAccessor):
 		return offset
 
 	def getRawImage(self):
-		key = self.toHash()
-		if key not in self._cache:
+		self.resolveDynamicFields()
+		cache = Image._cache
+		key = self.cacheKey()
+		frame = cache.pop(key,None)
+		if frame == None:
 			frame = self.currentFrame
 			frame = pygame.transform.scale(frame,self.scaleSize)
 			frame = self.cutImage(frame)
@@ -87,8 +152,10 @@ class Image(AttributeAccessor):
 			frame.fill(self.color,special_flags=pygame.BLEND_RGBA_MULT)
 			frame = pygame.transform.flip(frame,self.flipX,self.flipY)
 			frame = pygame.transform.rotate(frame,self.angle)
-			self._cache[key] = frame
-		return self._cache[key]
+			while len(cache) >= self._cacheLimit:
+				del cache[next(iter(cache))]
+		cache[key] = frame
+		return frame
 
 	def display(self,displaySurf,pos):
 		displaySurf.blit(self.getRawImage(), pos)
@@ -97,9 +164,10 @@ class Image(AttributeAccessor):
 		if image.get_size() == self.cutSize:
 			return image
 		try:
-			image.subsurface(pygame.Rect(0, 0, *self.cutSize))
-			return image
-		except:
+			# a crop, so a strip texture can show a piece of itself rather
+			# than being squeezed whole into the target size
+			return image.subsurface(pygame.Rect(0, 0, *self.cutSize)).copy()
+		except ValueError:
 			newImage = pygame.surface.Surface(self.cutSize,pygame.SRCALPHA)
 			tile_w, tile_h = image.get_size()
 			target_w, target_h = self.cutSize

@@ -1,4 +1,4 @@
-from data.core import events
+from data.system import events
 from data.spatial.hitbox import Hitbox
 from data.managers.timeManager import Timer
 from data.spatial import hitbox,spatial
@@ -31,7 +31,10 @@ class Animation:
     def load(self,sprite:"Sprite"):
         sprite.addTimer("animation",self.countDown,True)
         if not self.resetGif and self.timer != None:
+            # this animation is meant to carry on where it stopped, so the
+            # frozen timer goes back in and starts counting again
             sprite.replaceTimer("animation",self.timer)
+            self.timer.start()
         sprite.moveable = self.moveable
         sprite.displayType = self.displayType
         sprite.image.setImageData(self.imageData)
@@ -40,8 +43,15 @@ class Animation:
         self.startFunc(sprite)
 
     def unload(self,sprite:"Sprite",newAnimation:"Animation"):
-        if not self.resetGif:
-            self.timer = sprite.getTimer("animation").copy()
+        if not self.resetGif and sprite.isTimer("animation"):
+            timer = sprite.getTimer("animation")
+            # freezing it, otherwise the cycles spent in other animations
+            # count against this one and it ends the moment it comes back.
+            # A stopped timer is not counting at all - a countdown of -1 is
+            # held that way - and freezing that would come back as time
+            # already spent, so it is dropped and the countdown is armed
+            # afresh on the next load.
+            self.timer = None if timer.stopped else timer.copyAndStop()
         self.endFunc(sprite)
 
     def getImageData(self):
@@ -59,11 +69,15 @@ class SpriteData:
     animations:dict[str:Animation] = field(default_factory=dict)
     clientData:list = field(default_factory=list)
     saveData:list = field(default_factory=list)
-    displayByDirectionX:bool = True
+    # Whether the anchor follows the way the sprite is facing. A sprite whose
+    # art is mirrored as it turns needs it, because the overhang swaps sides
+    # with the picture; anything else - a widget, a floor tile, a dropped item
+    # - keeps the anchor its animation asked for.
+    displayByDirectionX:bool = False
     displayByDirectionY:bool = False
 
     def __post_init__(self):
-        self.clientData=["rect","currentAnimation"]+self.clientData
+        self.clientData=["rect","currentAnimation","drawIndex"]+self.clientData
 
 
 class Sprite(spatial.Spatial,pygame.sprite.Sprite,sendable.Sendable):
@@ -94,12 +108,15 @@ class Sprite(spatial.Spatial,pygame.sprite.Sprite,sendable.Sendable):
             self.objectData = objectData
         else:
             self.getDefaultData()
+        # taken before the sprite joins the draw group, so nothing can be
+        # drawn without a place in the order
+        self.drawIndex:int = core.nextDrawIndex()
         spatial.Spatial.__init__(self,core,pos)
         pygame.sprite.Sprite.__init__(self,core.emittersManager.displayManager)
         self.directionX:"Sprite.DirectionX" = self.DirectionX.left
         self.directionY:"Sprite.DirectionY" = self.DirectionY.top
         self.addTimer("animation",repeat=True)
-        self.image: Image = Image(self.getAnimation().getImageData())
+        self.image: Image = Image(self.getAnimation().getImageData(),self)
         self.core = core
         self.visible:bool = True
         self.speed:int = 1
@@ -115,11 +132,15 @@ class Sprite(spatial.Spatial,pygame.sprite.Sprite,sendable.Sendable):
         self.objectData = SpriteData(hitbox.Hitbox(0, 0, 0, 0),{"default":Animation()})
 
     def __post_init__(self):
+        # a leaf class calls this once its own __init__ is done: the data can
+        # name any attribute, so nothing may be applied before it exists.
+        # Loading a saved or streamed sprite goes through core.patchObject
+        # instead, which does the same thing from the outside.
         self.handleDictData()
 
     def handleDictData(self):
         if self.dictData != {}:
-            self.fromDict()
+            self.fromDict(self.dictData)
             
     def toData(self):
         return self.toDict(self.objectData.clientData)
@@ -137,11 +158,19 @@ class Sprite(spatial.Spatial,pygame.sprite.Sprite,sendable.Sendable):
         self.rect.size = size
         self.objectData.hitbox.updateRect(self.rect,self.pos)
 
-    def getDirection(self) -> None:
+    def updateDirection(self) -> None:
+        """Note which way the sprite is heading.
+
+        This has to run while the vectors are still in hand. A step lasts one
+        cycle, updateVectors spends it and drops it, and drawing happens after
+        all of that: a sprite asked at draw time is always standing still and
+        would keep the facing it was built with forever.
+        """
+        if not self.moveable:
+            return
         change = (0,0)
-        if self.moveable:
-            for vector in self.vectors.values():
-                change = Rect.addPos(change,vector.calculateDelta(self))
+        for vector in self.vectors.values():
+            change = Rect.addPos(change,vector.calculateDelta(self))
         if change[0] > 0:
             self.directionX = self.DirectionX.right
         elif change[0] < 0:
@@ -151,13 +180,18 @@ class Sprite(spatial.Spatial,pygame.sprite.Sprite,sendable.Sendable):
         elif change[1] > 0:
             self.directionY = self.DirectionY.bottom
 
+    def getDirection(self) -> None:
+        """Put the anchor on the side the sprite is facing.
+
+        The art is mirrored as the sprite turns, so whatever overhangs the
+        hitbox swaps sides with it. Facing left means the overhang is on the
+        left, which is the right hand edge of the picture holding still.
+        """
         if self.objectData.displayByDirectionX:
             directionX = self.DirectionX(not self.directionX.value).name
             self.setDisplayTypeEnd(directionX)
-            
 
         if self.objectData.displayByDirectionY:
-            
             directionY = self.DirectionY(not self.directionY.value).name
             self.setDisplayTypeStart(directionY)
 
@@ -166,7 +200,7 @@ class Sprite(spatial.Spatial,pygame.sprite.Sprite,sendable.Sendable):
         return self.image.renderOrder
 
     def setDisplayTypeEnd(self,end) -> None:
-        self.displaytype = self.displayType.setEnd(end)
+        self.displayType = self.displayType.setEnd(end)
 
     def setDisplayTypeStart(self,start) -> None:
         self.displayType = self.displayType.setStart(start)
@@ -252,6 +286,23 @@ class Sprite(spatial.Spatial,pygame.sprite.Sprite,sendable.Sendable):
         self.image.display(displaySurf,offset)
         self.rect.display(displaySurf)
 
+
+    @ property
+    def artRect(self) -> Rect:
+        """The frame on screen, as a world rect.
+
+        `rect` is the hitbox, which is what a sprite walks into things with.
+        It can be a fraction of the picture: a tall lamp is a few pixels of
+        base. Aiming at a sprite means aiming at what is drawn, so anything
+        resolving a click wants this instead.
+        """
+        pos = self.calculatePosByDisplayType()
+        size = self.image.getRawImage().get_size()
+        return Rect(pygame.rect.Rect(int(pos[0]),int(pos[1]),*size),self.dimension)
+
+    def collideCheckArt(self,rect:Rect,additionalRange:int=0) -> bool:
+        return self.artRect.collideRect(rect,additionalRange)
+
     # rect
 
     def collideCheck(self,other:"Sprite",additionalRange:int=0) -> bool:
@@ -276,5 +327,6 @@ class Sprite(spatial.Spatial,pygame.sprite.Sprite,sendable.Sendable):
     def update(self) -> bool:
         super().update()
         self.updateAnimations()
+        self.updateDirection()
         self.updateVectors()
         return False

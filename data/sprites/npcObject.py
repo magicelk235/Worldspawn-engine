@@ -12,11 +12,14 @@ class Lootable:
 		
 	def generateItem(self,inventory:inventory.Inventory,core):
 		if random.random() < self.chance:
-			if isinstance(self.itemID,set):
+			if isinstance(self.itemID,(set,list,tuple)):
 				item = random.choice(list(self.itemID))
 			else:
 				item = self.itemID
-			inventory.addItemByCount(core.getItem(item)(),self.count)
+			# the static items prefab is reached through getItems
+			itemClass = core.getItems(item)
+			if itemClass != None:
+				inventory.addItemByCount(itemClass(),self.count)
 
 
 @ dataclass
@@ -38,7 +41,9 @@ class Spawner:
 		if not npcObject.isTimer(self.countDownName):
 			npcObject.addTimer(self.countDownName,self.countDown,True)
 			setattr(npcObject,self.setName,set())
-			npcObject.addIdGroup(self.setName,lambda x,y:y in getattr(x,self.setName))
+			# an id group check is called with the id and nothing else
+			npcObject.addIdGroup(self.setName,
+								 lambda id,owner=npcObject: id in getattr(owner,self.setName))
 
 	def getSpawnedCount(self,npcObject:"NpcObject"):
 		return len(getattr(npcObject,self.setName))
@@ -49,17 +54,22 @@ class Spawner:
 	def update(self,npcObject:"NpcObject"):
 		self.npcObjectInit(npcObject)
 		if self.canSpawn(npcObject):
-			spawnedCount = self.getSpawnedCount(npcObject)
-			for i in range(spawnedCount-self.max if spawnedCount+self.amount>self.max else self.amount):
+			free = self.max-self.getSpawnedCount(npcObject)
+			for i in range(min(self.amount,free)):
 				self.generateObject(npcObject)
 
 	def generateObject(self,npcObject:"NpcObject"):
 		prefabPath = self.choiceObject()
 		pos = self.generatePos(npcObject.pos)
-		id = npcObject.core.getObjectByPrefabPath(prefabPath)(core=npcObject.core,pos=pos,tag=npcObject.id,**self.initData)
+		cls = npcObject.core.getObjectByPrefabPath(prefabPath)
+		if cls == None:
+			return
+		spawned = cls(core=npcObject.core,pos=pos,tag=npcObject.id,**self.initData)
+		# nothing exists in the world until the core hands it an id
+		id = npcObject.core.addObject(spawned)
 		getattr(npcObject,self.setName).add(id)
 		if self.needsTarget:
-			npcObject.core.getObject(id).target = npcObject.target
+			spawned.target = npcObject.target
 
 
 	def generatePos(self,center):
@@ -82,7 +92,8 @@ class NpcObject(aliveObject.AliveObject):
 		for lootable in self.objectData.lootableList:
 			lootable.generateItem(self.inventory,self.core)
 	def update(self):
-		super().update()
+		self.updateSpawners()
+		return super().update()
 
 	def updateSpawners(self):
 		for spawner in self.objectData.spawners:

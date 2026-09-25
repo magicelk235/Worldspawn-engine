@@ -56,6 +56,13 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
 
     def __init__(self):
         self.sprites = {}
+        # Draw order inside a render band used to be whatever order sprites
+        # happened to be created in. That is fine on one machine and wrong the
+        # moment a second one is watching: a client builds its sprites in the
+        # order deltas arrive, so a panel could land on top of its own
+        # buttons. Every sprite takes a number from here and the number is
+        # streamed, so a client draws in the host's order.
+        self.drawCounter = 0
         self.emittersManager = EmittersManager(self)
         
         events.EventManager.__init__(self)
@@ -72,6 +79,10 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
         Api.__init__(self)
         self.setStartMode()
         
+    def nextDrawIndex(self) -> int:
+        self.drawCounter += 1
+        return self.drawCounter
+
 
     def updateInput(self):
         pass
@@ -141,21 +152,22 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
         
 
     def addObjectToGroupById(self,object:Runnable,id:str,groupName:str):
-        try:
-            groupDict = getattr(self,groupName)
+        # only domains that asked for a dynamic getter have a group dict, so a
+        # missing one is normal and not an error
+        groupDict = getattr(self,groupName,None)
+        if isinstance(groupDict,dict):
             groupDict[id] = object
-        except:
-            pass
+
     def removeObjectToGroupById(self,id:str,groupName:str):
-        try:
-            groupDict:dict = getattr(self,groupName)
-            object = groupDict.pop(id)
-        except:
-            pass
-        
-    
+        groupDict = getattr(self,groupName,None)
+        if isinstance(groupDict,dict):
+            groupDict.pop(id,None)
+
     def removeObjectByID(self, id):
         object = self.getObject(id)
+        if object == None:
+            # already gone: two owners dropping the same sprite in one cycle
+            return
         domainName = object.domain
         prefabName = object.prefab
         domain = self.getDomain(domainName)
@@ -166,6 +178,11 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
         self.removeObjectToGroupById(id,prefabName)
         self.emittersManager.removeObject(object)
         self.addEvent(self.objectRemovedEventTemplate(id,object.module))
+        if getattr(object,"uiParts",None):
+            # a widget owns the sprites it built. Run this once the id is
+            # already out of the world, so a teardown that reaches back for
+            # its own object finds nothing instead of looping
+            object.remove()
 
     def getAliveObjects(self):
         aliveObjects = {}
@@ -176,8 +193,12 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
 
     def spawnFromEntry(self,id:str,prefabPath:str,data:dict):
         """Create a sprite from serialized form (network delta or saved world)."""
+        if not isinstance(data,dict):
+            return None
         rect = data.get("rect")
-        if prefabPath == None or rect == None:
+        if prefabPath == None or not isinstance(rect,dict):
+            return None
+        if not all(key in rect for key in ("x","y","dimension")):
             return None
         try:
             cls = self.getObjectByPrefabPath(prefabPath)
@@ -187,7 +208,14 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
             return None
         object = cls(self,(rect["x"],rect["y"],rect["dimension"]))
         self.addObjectByID(object,id)
-        self.patchObject(object,data)
+        try:
+            self.patchObject(object,data)
+        except (AttributeError,KeyError,TypeError,ValueError) as e:
+            # the stored fields no longer fit this class: drop the sprite
+            # rather than leave a half-applied one in the world
+            self.removeObjectByID(id)
+            self.raiseError("spriteNotRestored",f"{id} ({prefabPath}): {e}")
+            return None
         return object
 
     def patchObject(self,object,data:dict) -> None:
@@ -196,7 +224,11 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
         rect = data.get("rect")
         object.fromDict(data)
         if rect != None:
-            object.pos = (rect["x"],rect["y"],rect["dimension"])
+            # a serialized rect carries the hitbox, which sits at the sprite
+            # position plus the hitbox offset; feeding it back in as the
+            # position would walk the sprite by that offset on every load
+            hitbox = object.objectData.hitbox
+            object.pos = (rect["x"]-hitbox.xOffset,rect["y"]-hitbox.yOffset,rect["dimension"])
         if currentAnimation != None:
             object.loadAnimation(currentAnimation)
 
@@ -236,12 +268,28 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
         except (OSError,ValueError,yaml.YAMLError):
             self.raiseError("worldNotFound",f"no saved world named {name}")
             return False
+        if not isinstance(sprites,dict):
+            # refuse before touching the world: a half-cleared core is worse
+            # than one that never started loading
+            self.raiseError("worldCorrupt",f"the sprite table of {name} is not a mapping")
+            return False
+        if not isinstance(settings,dict):
+            settings = {}
         for id in list(self.sprites.keys()):
             self.removeObjectByID(id)
+        skipped = 0
         for id,entry in sprites.items():
-            self.spawnFromEntry(id,entry.get("prefabPath"),dict(entry["data"]))
-        self.bannedPlayers = set(settings.get("bannedPlayers",[]))
+            # one unreadable sprite - a prefab the packages no longer provide,
+            # a truncated entry - must cost that sprite and nothing else
+            data = entry.get("data") if isinstance(entry,dict) else None
+            if not isinstance(data,dict) or self.spawnFromEntry(id,entry.get("prefabPath"),dict(data)) == None:
+                skipped += 1
+        if skipped:
+            self.raiseError("worldPartlyLoaded",f"{skipped} sprites of {name} could not be restored")
+        self.bannedPlayers = set(settings.get("bannedPlayers",[]) or [])
         custom = settings.get("custom",{})
+        if not isinstance(custom,dict):
+            custom = {}
         for packageName,package in self.packages.items():
             loadState = getattr(package.core,"loadState",None)
             if loadState != None and packageName in custom:
@@ -269,20 +317,17 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
         if self.network != None:
             self.network.close()
     
-    def encryptIp(self,ip):
-        cryptedIp = ""
-        for char in ip:
-            cryptedIp += self.ipCryptKey[char]
-        return cryptedIp
-
-    def decryptIp(self,cryptedIp):
-        ip = ""
-        for char in cryptedIp:
-            ip += self.ipCryptKey[char]
-        return ip
-    
-    def host(self,port:int,password:str=None,sendRate:int=1):
-        self.network = network.HostNetwork(port)
+    def host(self,port:int,password:str=None,sendRate:int=1) -> bool:
+        if self.mode == self.Mode.host:
+            self.raiseError("alreadyHosting",f"already hosting on this world")
+            return False
+        try:
+            self.network = network.HostNetwork(port)
+        except OSError as e:
+            # port taken, or no permission to bind it: a failed listen is not
+            # a reason to take the game down
+            self.raiseError("hostFailed",str(e))
+            return False
         self.clientIdentities = {}   # transport id -> stable client id
         self.clientTransports = {}   # stable client id -> transport id
         self.clientMirrors = {}      # stable client id -> last data sent per sprite
@@ -290,6 +335,7 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
         self.sendRate = max(1,sendRate)
         self.mode = self.Mode.host
         pygame.display.set_caption("WorldSpawn - hosting")
+        return True
 
     def join(self,ip:str,port:int,identity:str=None,password:str=None) -> bool:
         try:
@@ -371,10 +417,14 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
                 if entry == None:
                     continue
                 known = mirror.get(id)
-                if known == None:
+                # an id can be handed to a different kind of sprite between
+                # two syncs; diffing against the old one would patch the
+                # replacement's fields onto whatever the client still holds
+                if known == None or known["prefabPath"] != entry["prefabPath"]:
                     changed[id] = entry
                 else:
-                    diff = {key:value for key,value in entry["data"].items() if known.get(key) != value}
+                    diff = {key:value for key,value in entry["data"].items()
+                            if known["data"].get(key) != value}
                     if diff:
                         changed[id] = {"data":diff}
             removed = [id for id in mirror if id not in visible or id not in current]
@@ -383,11 +433,10 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
             for id in removed:
                 mirror.pop(id,None)
             for id,entry in changed.items():
-                known = mirror.get(id)
-                if known == None:
-                    mirror[id] = dict(entry["data"])
+                if "prefabPath" in entry:
+                    mirror[id] = {"prefabPath":entry["prefabPath"],"data":dict(entry["data"])}
                 else:
-                    known.update(entry["data"])
+                    mirror[id]["data"].update(entry["data"])
 
     def applyDelta(self,message:dict) -> None:
         for id in message["removed"]:
@@ -395,8 +444,13 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
                 self.removeObjectByID(id)
         for id,entry in message["changed"].items():
             object = self.getObject(id)
+            prefabPath = entry.get("prefabPath")
+            if object != None and prefabPath != None and object.prefabPath != prefabPath:
+                # the host handed this id to a different kind of sprite
+                self.removeObjectByID(id)
+                object = None
             if object == None:
-                self.spawnFromEntry(id,entry.get("prefabPath"),entry["data"])
+                self.spawnFromEntry(id,prefabPath,entry["data"])
             else:
                 self.patchObject(object,entry["data"])
 
@@ -411,6 +465,12 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
                     self.rejectClient(transportID,"banned")
                 elif self.hostPassword != None and message.get("password") != self.hostPassword:
                     self.rejectClient(transportID,"wrong password")
+                elif clientID == self.userID:
+                    # the host's own character is named after userID, which is
+                    # the same on every machine. A guest offering that name
+                    # would be handed the host's character and its input
+                    # manager, and the two would drive one sprite.
+                    self.rejectClient(transportID,"identity already belongs to the host")
                 else:
                     self.attachClient(transportID,clientID)
             elif messageType == "disconnected":
@@ -429,7 +489,11 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
             self.syncClients()
 
     def clientNetworkUpdate(self):
-        if not self.network.connected:
+        # anything already queued is read before the socket is judged: a host
+        # that refuses a join sends the reason and then drops the connection,
+        # so checking the socket first would replace "banned" or "wrong
+        # password" with "lost connection" every time
+        if not self.network.connected and self.network.messages.empty():
             self.raiseError("disconnected","lost connection to host")
             self.network = None
             self.setStartMode()

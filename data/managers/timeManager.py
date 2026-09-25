@@ -1,5 +1,9 @@
-from data.core import events
+import pygame
+from data.system import events
 from pygame.time import set_timer
+# the tick is scheduled while this module is read, and scheduling needs the
+# event subsystem up; init is idempotent, so asking again costs nothing
+pygame.init()
 
 
 class Timer:
@@ -35,12 +39,19 @@ class Timer:
         return self._countDown
     @countDown.setter
     def countDown(self,countDown):
+        # assigning a countdown arms the timer from now; -1 means "no timer",
+        # which is held as a stopped one so it never reports as ended
         self._countDown = countDown
         self.endCycle = self.currentCycle() + countDown
-        if self.countDown == -1:
-            self.stop()
+        if countDown == -1:
+            # frozen from this cycle: re-arming has to move the mark too, or
+            # a resume later would compute its remaining time from whenever
+            # the timer happened to be stopped before
+            self.stopped = True
+            self.stoppedCycle = self.currentCycle()
         else:
-            self.start()
+            self.stopped = False
+            self.stoppedCycle = 0
 
     @ property
     def remainingTime(self):
@@ -51,13 +62,20 @@ class Timer:
     def restart(self):
         self.countDown = self.countDown
     def stop(self):
+        # stopping an already stopped timer must not move the mark it was
+        # frozen at, or every extra stop hands back a different remaining
+        # time when it is resumed
+        if self.stopped:
+            return
         self.stopped = True
         self.stoppedCycle = self.currentCycle()
 
     def start(self):
+        # resume: the time that was left when it stopped is the time it has
+        # left now, and the nominal countdown is untouched
         if self.stopped:
             self.stopped = False
-            self.countDown = self.endCycle - self.stoppedCycle
+            self.endCycle = self.currentCycle() + (self.endCycle - self.stoppedCycle)
             self.stoppedCycle = 0
 
     def ended(self) -> bool:
@@ -92,13 +110,25 @@ class TimeManager:# cycles = 20/1000 s
         return self.timers[name]
 
     def removeTimer(self,name):
-        self.timers.pop(name)
+        self.timers.pop(name,None)
 
     def getRemainingTime(self,name):
-        return self.timers[name].remainingTime
+        timer = self.timers.get(name)
+        # no timer is not "no time left": nothing is counting
+        return float("inf") if timer == None else timer.remainingTime
 
     def timerEnded(self,name):
-        timer = self.getTimer(name)
+        """True on the one cycle a timer runs out.
+
+        A one shot timer is dropped the moment it reports, so asking again
+        asks about a name that no longer has a timer. Arming a cooldown once
+        and polling it every cycle is the normal way to use this, and the
+        answer for the cycles after is no: it already ended, and it is not
+        going to end again.
+        """
+        timer = self.timers.get(name)
+        if timer == None:
+            return False
         ended = timer.ended()
         if ended and not timer.repeat:
             self.removeTimer(name)

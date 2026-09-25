@@ -1,8 +1,9 @@
-import os, sys
-os.environ.setdefault("SDL_VIDEODRIVER","dummy")
-os.environ.setdefault("SDL_AUDIODRIVER","dummy")
-root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0,root); os.chdir(root)
+import sys
+
+sys.path.insert(0, __file__.rsplit("/", 1)[0])
+import harness
+
+ROOT = harness.buildRoot()
 
 import data.core
 
@@ -14,6 +15,23 @@ assert not core.errorHappened("otherError")
 assert core.getErrors("testError")[0].message == "something broke"
 assert core.running == True
 
-core.raiseError("fatalError","dead",fatal=True)
+# A handled error is reported to the player by whoever raised it, so the log
+# gets one line and no traceback: a refused connection that prints a stack
+# reads like a crash to anyone running the game.
+import contextlib, io
+
+captured = io.StringIO()
+with contextlib.redirect_stderr(captured):
+    core.raiseError("connectionFailed","no route to host")
+quiet = captured.getvalue()
+assert "connectionFailed: no route to host" in quiet, quiet
+assert "Traceback" not in quiet and "File \"" not in quiet, \
+    f"a handled error must not print a stack:\n{quiet}"
+
+captured = io.StringIO()
+with contextlib.redirect_stderr(captured):
+    core.raiseError("fatalError","dead",fatal=True)
+loud = captured.getvalue()
+assert "File \"" in loud, f"a fatal error should still say where it came from:\n{loud}"
 assert core.running == False, "fatal error must stop the engine"
 print("errors OK")

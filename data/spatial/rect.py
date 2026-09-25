@@ -29,7 +29,9 @@ class DisplayType(Enum):
         return self
 
     def calculatePosByDisplayType(self,image,hitbox, pos):
-        startDict = {"top":0,"bottom":1,"center":-0.5}
+        # how far along the overhang the anchor sits: 0 keeps the image edge
+        # on the hitbox edge, 1 pushes it to the far edge, 0.5 centres it
+        startDict = {"top":0,"bottom":1,"center":0.5}
         endDict = {"left":0,"right":1,"center":0.5}
         start,end = self.getParts()
         imageSize = image.size
@@ -114,11 +116,10 @@ class Rect(sendable.Sendable):
 
     @x.setter
     def x(self,x):
+        # the rect is whole pixels; the leftover is kept so distances stay
+        # honest for anything moving slower than a pixel per cycle
         self.rect.x = int(x)
         self.fracX = x-int(x)
-        if int(self.fracX) > 1:
-            self.rect.x += int(self.fracX)
-            self.fracX -= int(self.fracX)
     @ property
     def y(self):
         return self.rect.y
@@ -126,9 +127,6 @@ class Rect(sendable.Sendable):
     def y(self,y):
         self.rect.y = int(y)
         self.fracY = y-int(y)
-        if int(self.fracY) > 1:
-            self.rect.y += int(self.fracY)
-            self.fracY -= int(self.fracY)
     @property
     def dimension(self):
         return self._dimension
@@ -150,20 +148,23 @@ class Rect(sendable.Sendable):
         return self.getAttr("rect." + displayType.value)
 
     def copy(self) -> "Rect":
-        return Rect(self.rect.copy(), self.dimension)
+        copied = Rect(self.rect.copy(), self.dimension, self.displayType)
+        copied.fracX = self.fracX
+        copied.fracY = self.fracY
+        return copied
 
     def calculateDistanceX(self,other:"Rect") -> float:
-        return ((other.Rect.centerx+other.fracX - self.rect.centerx+self.fracX) ** 2)**0.5
+        return abs((other.rect.centerx+other.fracX) - (self.rect.centerx+self.fracX))
 
     def calculateDistanceY(self,other:"Rect") -> float:
-        return ((other.Rect.centery+other.fracY - self.rect.centery+self.fracY) ** 2)**0.5
+        return abs((other.rect.centery+other.fracY) - (self.rect.centery+self.fracY))
 
     def calculateDistance(self,other:"Rect") -> float:
         return self.calculateDistanceX(other) + self.calculateDistanceY(other)
 
     def __eq__(self, other:"Rect") -> bool:
         if isinstance(other, Rect):
-            if self.sameDimension(other):
+            if not self.sameDimension(other):
                 return False
             return self.rect.x == other.rect.x and self.rect.y == other.rect.y and self.rect.w == other.rect.w and self.rect.h == other.rect.h
         return False

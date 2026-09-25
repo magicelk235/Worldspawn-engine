@@ -3,7 +3,7 @@ from dataclasses import dataclass,field
 from data.spatial import rect,hitbox
 from data.sprites.sprite import Sprite,Animation,SpriteData
 from data.inventory import inventory
-from data.core import events
+from data.system import events
 from data.emitters import image
 
 @dataclass(frozen=True)
@@ -14,10 +14,10 @@ class RideData:
 
 @dataclass
 class AliveObjectData(SpriteData):
-    save:list = field(default_factory=list)
     health:int = 1
     damage:int = 1
-    shield:int = 1
+    # the share of incoming damage that is absorbed, 0 to 1
+    shield:float = 0.0
     speed:int = 1
     react:int = 1
     attackCountDown:int = 1
@@ -27,7 +27,11 @@ class AliveObjectData(SpriteData):
 
     def __post_init__(self):
         super().__post_init__()
-        self.save+=["rect","objectType"]
+        # what makes an alive object the one it was before the save: the
+        # position already travels in clientData, the rest of the state
+        # does not, and a mob that comes back at full health with an empty
+        # inventory is a new mob wearing the old one's name
+        self.saveData = [key for key in ("health","inventory") if key not in self.saveData] + self.saveData
         
 class AliveObject(Sprite):
     eventRegister = events.EventRegister
@@ -38,14 +42,14 @@ class AliveObject(Sprite):
 
     @staticmethod
     def healthChangedEventTemplate(healed:str,currentHealth:int,oldHealth:int):
-        return pygame.event.Event(events.EventRegister.getID("attack"),locals())
+        return pygame.event.Event(events.EventRegister.getID("healthChanged"),locals())
     
     @staticmethod
     def riderMountEventTemplate(rideID,riderID,remainingSlots):
-        return pygame.event.Event(events.EventRegister.getID("riderMount"))
+        return pygame.event.Event(events.EventRegister.getID("riderMount"),locals())
     @ staticmethod
     def riderDismountEventTemplate(rideID,riderID,remainingSlots):
-        return pygame.event.Event(events.EventRegister.getID("riderDismount"))
+        return pygame.event.Event(events.EventRegister.getID("riderDismount"),locals())
 
     attackEvent = eventRegister.register("attack",attackEventTemplate)
 
@@ -57,7 +61,7 @@ class AliveObject(Sprite):
 
 
     def __init__(self, core, pos: tuple[int,int,str],objectData,tag=None,dictData={}):
-        super().__init__(core, pos,objectData)
+        super().__init__(core, pos,objectData,dictData)
         self._health = 0
         self.resetModifiers()
         self.health = self.objectData.health
@@ -67,7 +71,8 @@ class AliveObject(Sprite):
         self.allies = set()
         self.attacker = None
         self.target = None
-        self.inventory = inventory.Inventory(5,5,self)
+        self.inventory = inventory.Inventory(self.objectData.inventorySize,
+                                             self.objectData.inventorySize,self)
         self.riders:set[str] = set()
         self.ride = None
         self.addIdGroup("riders",self.isRider)
@@ -84,27 +89,47 @@ class AliveObject(Sprite):
         return self.target is not None
 
     def getDefaultData(self):
-        self.objectData = AliveObjectData(hitbox.Hitbox(1,1),{"default":Animation(image.ImageData(flipX="@directionX")),"walk":Animation(image.ImageData(flipX="@directionX")),"damage":Animation(imageData=image.ImageData(flipX="@directionX",color=(270,0,0,0)))})
+        # the art faces left, so the mirrored frame is the one facing right
+        mirror = "@directionX.value"
+        self.objectData = AliveObjectData(hitbox.Hitbox(1,1),
+                                          {"default":Animation(image.ImageData(flipX=mirror)),
+                                           "walk":Animation(image.ImageData(flipX=mirror)),
+                                           # a red flash: the tint multiplies the
+                                           # frame, so a channel over 255 or a
+                                           # zero alpha is not a colour at all
+                                           "damage":Animation(imageData=image.ImageData(flipX=mirror,color=(255,60,60,255)))},
+                                          # these frames are mirrored as the
+                                          # object turns, so the anchor has to
+                                          # change sides with them
+                                          displayByDirectionX=True)
 
     def UpdateRidersPos(self):
-        for i in range(len(self.riders)):
-            riderID = self.riders[i]
+        # sorted, so a second rider does not swap places with the first one
+        # every time the set happens to iterate differently
+        for i,riderID in enumerate(sorted(self.riders)):
             rider:"AliveObject" = self.core.getObject(riderID)
+            if rider == None:
+                continue
             rider.pos = self.pos
-            rider.axis += self.objectData.rideData.point
+            rider.axis = rect.Rect.addPos(rider.axis,self.objectData.rideData.point)
             for _ in range(i):
-                rider.axis += self.objectData.rideData.offset
+                rider.axis = rect.Rect.addPos(rider.axis,self.objectData.rideData.offset)
 
     def getRemainingSlots(self):
-        return len(self.riders)-self.objectData.rideData.max
+        return self.objectData.rideData.max-len(self.riders)
 
-    def removeRider(self,rider:str):
-        self.riders.remove(rider)
+    def removeRider(self,rider:str) -> bool:
+        # a rider that dies stops riding the moment its id leaves the world,
+        # so whatever was holding onto it can ask to dismount afterwards
+        if rider not in self.riders:
+            return False
+        self.riders.discard(rider)
         self.addEvent(self.riderDismountEventTemplate(self.id,rider,self.getRemainingSlots()))
         self.UpdateRidersPos()
+        return True
 
     def addRider(self,rider: str) -> bool:
-        if not (self.isRider(rider) or self.getRemainingSlots()==0):
+        if not (self.isRider(rider) or self.getRemainingSlots()<=0):
             self.riders.add(rider)
             self.addEvent(self.riderMountEventTemplate(self.id,rider,self.getRemainingSlots()))
             self.UpdateRidersPos()
@@ -115,10 +140,11 @@ class AliveObject(Sprite):
         return rider in self.riders
 
     def deathCheck(self) -> bool:
-        if self.eventHappened(self.attackEvent):
-            if self.health == 0:
-                self.inventory.convetToDrops()
-                return True
+        # anything that empties the health bar kills, not only a hit: poison,
+        # drowning or a script setting health straight to zero
+        if self.health <= 0:
+            self.inventory.convertToDrops()
+            return True
         return False
 
     @ property
@@ -126,34 +152,49 @@ class AliveObject(Sprite):
         return self._health
     @ health.setter
     def health(self,health:int):
-        health = max(health,0)
+        # hit points are whole: a modifier, a shielded hit or a saved world
+        # can all offer a fraction, and half a heart is not a state anything
+        # downstream knows how to compare or draw
+        health = int(max(health,0))
         health = min(self.maxHealth,health)
+        if health == self._health:
+            return
         self.addEvent(self.healthChangedEventTemplate(self.id,health,self.health))
         self._health = health
 
-    @ Sprite.x.setter
-    def x(self,x:int) -> None:
-        Sprite.x.fset(self,x)
-        self.visionRect.center = self.axis
+    @ Sprite.pos.setter
+    def pos(self,pos:tuple[int,int,str]) -> None:
+        """Move the object, and the box it watches the world through with it.
 
-    @ Sprite.y.setter
-    def y(self,y:int) -> None:
-        Sprite.y.fset(self,y)
-        self.visionRect.center = self.axis
-
-    @ Sprite.dimension.setter
-    def dimension(self,dimension:str) -> None:
-        Sprite.dimension.fset(self,dimension)
-        self.visionRect.dimension = dimension
+        Every other way of moving one ends up here: x, y, axis, dimension, a
+        teleport, a portal, a respawn, and the core patching a sprite that
+        arrived from a save or from a host. Hanging the vision box off the x
+        and y setters instead left it behind on all of those, and an object
+        whose vision box is somewhere else cannot see what is standing on it.
+        """
+        Sprite.pos.fset(self,pos)
+        # constructing a Spatial assigns a position before resetModifiers has
+        # built the box
+        vision = getattr(self,"visionRect",None)
+        if vision != None:
+            vision.center = self.axis
+            vision.dimension = self.dimension
 
     def shareID(self,id:str) -> bool:
+        """Whether id is on this object's side.
+
+        One matching tag is enough: an owner and its pet, a pet and its
+        owner, or two things spawned by the same parent.
+        """
         other = self.core.getObject(id)
-        if hasattr(other,"tag"):
-            if self.id == other.tag and self.tag == other.id and self.tag == other.tag:
-                if id not in self.allies:
-                    self.allies.add(id)
-                return True
-        return False
+        if other == None:
+            return False
+        tag = getattr(other,"tag",None)
+        shared = ((self.tag != None and (self.tag == other.id or self.tag == tag))
+                  or (tag != None and tag == self.id))
+        if shared and id not in self.allies:
+            self.allies.add(id)
+        return shared
         
 
     def collideVisionCheck(self,other:"AliveObject") -> bool:
@@ -174,7 +215,8 @@ class AliveObject(Sprite):
         return self._maxHealth
     @ maxHealth.setter
     def maxHealth(self,maxHealth):
-        self._maxHealth = maxHealth
+        # the ceiling health is clamped against, so it has to be whole too
+        self._maxHealth = int(maxHealth)
         self.health = self.health
     @ property
     def damage(self):
@@ -193,7 +235,11 @@ class AliveObject(Sprite):
         return self._shield
     @ shield.setter
     def shield(self,shield:float):
-        self._shield = shield
+        # a share of incoming damage, so it is fractional by definition even
+        # when the content that declares it writes a plain 0. Without this,
+        # a modifier keeps the stat the kind of number it found and every
+        # piece of armour rounds itself away to nothing.
+        self._shield = float(shield)
 
     @ property
     def visionRadius(self):
@@ -202,10 +248,12 @@ class AliveObject(Sprite):
     @ visionRadius.setter
     def visionRadius(self,visionRadius:int):
         self._visionRadius = visionRadius
-        try:
-            self.visionRect.setSize(self.visionRadius,self.visionRadius)
-        except:
-            self.visionRect:rect.Rect = rect.Rect(pygame.rect.Rect(*self.axis,self.visionRadius,self.visionRadius),self.dimension)
+        vision = getattr(self,"visionRect",None)
+        if vision == None:
+            self.visionRect = rect.Rect(pygame.rect.Rect(*self.axis,visionRadius,visionRadius),
+                                        self.dimension)
+        else:
+            vision.size = (visionRadius,visionRadius)
         self.visionRect.rect.center = self.axis
 
     def resetModifiers(self) -> None:
@@ -217,19 +265,33 @@ class AliveObject(Sprite):
         self.react: int = self.objectData.react
         self.visionRadius:int = self.objectData.visionRadius
         
+    def applyTimedModifiers(self) -> None:
+        """Hook for effects that outlive a stat reset.
+
+        Inventory.applyModifiers calls this after the items have had their
+        say, so a timed effect lands on top of a modifier that sets a stat
+        outright instead of being wiped by it.
+        """
+        pass
+
     def attack(self, attacked) -> None:
-        attacked.applyDamage(self.damage)
+        attacked.applyDamage(self.damage,self)
         
     def applyDamage(self, damage, attacker=None) -> None:
-        if self.timers.get("damage", None) == None:
-            self.timers["damage"] = 0
-        if attacker != None and not self.shareID(attacker,self.id):
+        attackerID = attacker.id if attacker != None else None
+        if attacker != None and not self.shareID(attackerID):
             self.attacker = attacker
             for id in self.allies:
-                self.core.getObject(id).attacker = self.attacker
+                ally = self.core.getObject(id)
+                if ally != None:
+                    ally.attacker = self.attacker
         self.health -= round(damage * (1.00 - self.shield))
-        self.addEvent(self.attackEventTemplate(attacker.id,self.id,self.health))
+        self.addEvent(self.attackEventTemplate(attackerID,self.id,self.health))
 
     def update(self) -> bool:
         super().update()
+        # a slot emptied by spending its last item still carries the old item
+        # until this runs, so anything asking the inventory what it holds
+        # would keep getting the spent name back
+        self.inventory.update()
         return self.deathCheck()

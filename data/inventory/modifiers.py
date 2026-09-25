@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from enum import Enum
-from data.managers.timeManager import Timer
 
 
 class Mode(Enum):
@@ -39,28 +38,35 @@ class Modifier:
 
 
     def canBeApplied(self, hand):
-        return self.handNeeded and not hand
+        # a hand-only modifier counts once the item is actually held; one
+        # that does not need the hand always counts
+        return hand or not self.handNeeded
+
+    @staticmethod
+    def matchType(current,value):
+        """Keep a stat the kind of number it already was.
+
+        A stat is whole because what it counts is whole: hit points, cycles
+        of cooldown, pixels of speed. A x1.25 potion that leaves 12.5 maximum
+        hit points behind pushes a number that cannot exist through every
+        comparison, clamp and label downstream. Legacy truncated its percent
+        modifiers the same way and only kept a fraction where the stat was
+        already fractional, which is the shield and cooldown case.
+        """
+        if isinstance(current,bool) or not isinstance(current,(int,float)):
+            return value
+        if isinstance(value,bool) or not isinstance(value,(int,float)):
+            return value
+        if isinstance(current,int):
+            return int(value)
+        return float(value)
 
     def apply(self,object,hand=False):
         if self.canBeApplied(hand):
-            object.setAttr(self.name,self.mode.apply(object.getAttr(self.name),self.amount))
+            current = object.getAttr(self.name)
+            object.setAttr(self.name,self.matchType(current,self.mode.apply(current,self.amount)))
 
     @staticmethod
     def applyForList(modifiers,object,hand=False):
         for modifier in modifiers:
             modifier.apply(object,hand)
-
-@ dataclass(frozen=True)
-class TemporaryModifier(Timer,Modifier):
-    countDown:int
-
-    def update(self):
-        return self.ended()
-
-    def __eq__(self, other):
-        if isinstance(other,TemporaryModifier):
-            return self.__hash__() == other.__hash__()
-        return False
-
-    def __hash__(self):
-        return super().__hash__()

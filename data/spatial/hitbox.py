@@ -20,4 +20,7 @@ class Hitbox:
         hitbox.dimension = pos[2]
         
     def getRect(self,pos:tuple) -> Rect:
-        return Rect(pygame.rect.Rect(*pos[:2], self.w, self.h), pos[2])
+        # same placement updateRect uses, so a hitbox does not jump by its
+        # offset the first time the sprite moves
+        return Rect(pygame.rect.Rect(pos[0] + self.xOffset, pos[1] + self.yOffset,
+                                     self.w, self.h), pos[2])

@@ -9,6 +9,25 @@ WIRE_EVENTS = {
     pygame.MOUSEWHEEL: ("x","y","flipped"),
 }
 
+# convertKeys reports these under a readable name, so getKey has to be able to
+# turn that same name back into a key code
+NAMED_KEYS = {
+    "left shift": pygame.K_LSHIFT,
+    "right shift": pygame.K_RSHIFT,
+    "left ctrl": pygame.K_LCTRL,
+    "right ctrl": pygame.K_RCTRL,
+    "left alt": pygame.K_LALT,
+    "right alt": pygame.K_RALT,
+}
+
+# pygame.key.get_pressed() hands back a scancode indexed array whose subscript
+# translates a key code into that scancode, so held keys have to be probed by
+# code. Walking the array positionally reads scancodes, and naming those as if
+# they were key codes turns "d" into "" and "e" into "backspace".
+KEY_CODES = sorted({value for name,value in vars(pygame).items()
+                    if name.startswith("K_") and type(value) == int})
+KEY_NAMES = {code:pygame.key.name(code) for code in KEY_CODES}
+
 def serializeEvents(events) -> list[dict]:
     payload = []
     for event in events:
@@ -53,21 +72,18 @@ class InputManager(EventManager):
         self.mousePos = (0,0)
 
     def convertKeys(self,keys):
-        modifier_keys = {
-            pygame.K_LSHIFT: "left shift",
-            pygame.K_RSHIFT: "right shift",
-            pygame.K_LCTRL: "left ctrl",
-            pygame.K_RCTRL: "right ctrl",
-            pygame.K_LALT: "left alt",
-            pygame.K_RALT: "right alt",
-        }
         keyNames = set()
-        for index in range(len(keys)):
-            if keys[index]:
-                if index in modifier_keys:
-                    keyNames.add(modifier_keys[index])
-                else:
-                    keyNames.add(pygame.key.name(index))
+        for code in KEY_CODES:
+            try:
+                held = keys[code]
+            except (IndexError,KeyError,TypeError):
+                continue
+            if held:
+                name = KEY_NAMES[code]
+                # codes SDL knows but this build cannot name are skipped
+                # rather than reported as an empty key
+                if name != "":
+                    keyNames.add(name)
         mods = pygame.key.get_mods()
         if mods & pygame.KMOD_LSHIFT:
             if "left shift" not in keyNames:
@@ -106,7 +122,11 @@ class InputManager(EventManager):
 
     @staticmethod
     def getKey(key):
-        return getattr(pygame,f"K_{key.upper() if len(key)>1 else key}")
+        if key in NAMED_KEYS:
+            return NAMED_KEYS[key]
+        # pygame names every key it can report as held, so the same name maps
+        # straight back to a code: "space", "up" and "[1]" included
+        return pygame.key.key_code(key)
 
     def setRawInput(self,rawEvents,rawKeys,mousePos):
         self.convertEventList(rawEvents)
@@ -125,18 +145,18 @@ class InputManager(EventManager):
         return pending
     
     def mouseClicked(self,right=False):
+        # pygame numbers the buttons left 1, middle 2, right 3
+        button = 3 if right else 1
         for event in self.getEventList(pygame.MOUSEBUTTONDOWN):
-            if event.button == 1 and not right:
-                return True
-            elif event.button == 2 and right:
+            if event.button == button:
                 return True
         return False
     
     def mouseScroll(self,down=False):
-        for event in self.getEventList(pygame.MOUSEBUTTONDOWN):
-            if event.button == 3 and not down:
-                return True
-            elif event.button == 4 and down:
+        # the wheel is its own event; it stopped arriving as buttons 4 and 5
+        # in pygame 2, and buttons 3 and 4 were never the wheel at all
+        for event in self.getEventList(pygame.MOUSEWHEEL):
+            if (event.y < 0) == down and event.y != 0:
                 return True
         return False
     

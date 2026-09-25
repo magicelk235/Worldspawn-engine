@@ -1,6 +1,6 @@
 import pygame
 from dataclasses import dataclass
-from data.core import events
+from data.system import events
 
 from data.common.runnable import Runnable
 from sympy import cos,sin,pi
