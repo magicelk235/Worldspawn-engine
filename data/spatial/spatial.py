@@ -18,7 +18,10 @@ class Spatial(Runnable):
             return self.direction[0]*-1,self.direction[1]*-1
 
         def decTime(self) -> bool:
-            self.time -= 0.02
+            # rounded, because 0.02 has no exact binary form: taken off 0.2
+            # ten times it leaves a sliver above zero, and the vector would
+            # run an eleventh cycle
+            self.time = round(self.time - 0.02, 9)
             return self.time <= 0
 
         def getSpeed(self,spatial:"Spatial"):
@@ -39,12 +42,16 @@ class Spatial(Runnable):
             other:"Spatial.Vector" = vectors.get(self.opposedDirection)
             if other != None:
                 if self.speed == other.speed:
-                    if self.time > other.time:
+                    # rounded like decTime: two pushes that cancel out can
+                    # differ by a few billionths of a second, and whatever
+                    # is left over would still move the sprite a whole cycle
+                    remaining = round(self.time - other.time, 9)
+                    if remaining > 0:
                         vectors.pop(other.direction)
-                        self.time -= other.time
-                    elif self.time < other.time:
+                        self.time = remaining
+                    elif remaining < 0:
                         vectors.pop(self.direction)
-                        other.time -= self.time
+                        other.time = -remaining
                     else:
                         vectors.pop(self.direction)
                         vectors.pop(other.direction)
@@ -126,7 +133,12 @@ class Spatial(Runnable):
             other.time += vector.time
         else:
             self.vectors[vector.direction] = vector
-        vector.mergeOpposeds(self.vectors)
+            other = vector
+        # the merge has to be done by the vector that is actually stored: it
+        # takes things out of the table by direction, so a copy that was only
+        # folded into an existing push would delete that push along with the
+        # opposite one it was measured against
+        other.mergeOpposeds(self.vectors)
         
     def updateVectors(self) -> None:
         if self.moveable:

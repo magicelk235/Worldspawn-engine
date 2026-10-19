@@ -3,10 +3,12 @@ from data.sprites import sprite
 
 
 class UIObject(sprite.Sprite):
-    def __init__(self,core,pos,objectData,visiblePlayers,interactivePlayers):
+    # everything after pos is optional: a saved world and a host's delta
+    # rebuild every sprite with cls(core, pos) and nothing else
+    def __init__(self,core,pos,objectData=None,visiblePlayers=None,interactivePlayers=None):
         super().__init__(core,pos,objectData)
-        self.visiblePlayers = visiblePlayers
-        self.interactivePlayers = interactivePlayers
+        self.visiblePlayers = visiblePlayers if visiblePlayers != None else set()
+        self.interactivePlayers = interactivePlayers if interactivePlayers != None else set()
         self.uiParts:list["UIObject"] = []
 
     # Teardown is explicit through remove(). Doing it from __del__ means
@@ -78,7 +80,11 @@ class UIObject(sprite.Sprite):
     def getInputList(self):
         inpList:list[inputManager.InputManager] = []
         for id in self.interactivePlayers:
-            inpList.append(self.core.getInputManager(id))
+            # a client that disconnects loses its input manager straight
+            # away; the widgets it could use only hear about it later
+            inp = self.core.inputMangers.get(id)
+            if inp != None:
+                inpList.append(inp)
         return inpList
 
     def update(self):

@@ -1,5 +1,5 @@
 
-import pygame,enum,uuid,json,os
+import pygame,enum,uuid,json,os,traceback
 import yaml
 pygame.init()
 from data.system.api import Api
@@ -9,6 +9,15 @@ from data.common.runnable import Runnable
 from data.managers import idManager,inputManager
 from data.sprites import aliveObject
 
+def validInput(keys,mouse) -> bool:
+    """Whether an input message carries what a client sends: the held keys as
+    a list of names and the mouse as two numbers. Anything else is dropped
+    before it reaches an InputManager, where it would fail later and inside a
+    package instead."""
+    if not isinstance(keys,list) or not all(isinstance(key,str) for key in keys):
+        return False
+    return (isinstance(mouse,list) and len(mouse) == 2
+            and all(isinstance(value,(int,float)) for value in mouse))
 
 
 class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
@@ -73,6 +82,16 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
         self.mode = self.Mode.start
         self.network = None
         self.bannedPlayers = set()
+        # online bookkeeping exists before hosting does, so kick and ban have
+        # somewhere to look when nobody is connected, and a package folder
+        # named after one of these is caught when its group is made instead of
+        # being overwritten by host() or join() later
+        self.clientIdentities = {}   # transport id -> stable client id
+        self.clientTransports = {}   # stable client id -> transport id
+        self.clientMirrors = {}      # stable client id -> last data sent per sprite
+        self.hostPassword = None
+        self.sendRate = 1
+        self.identity = None
         self.addInputManager(self.userID)
         # pygame.display.set_caption(f"WorldSpawn Code:{self.ip}")
         # pygame.display.set_icon(pygame.image.load(default.resource_path("assets/gui/world_icon.png")))
@@ -117,16 +136,28 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
         pygame.display.set_caption(f"WorldSpawn")
         self.mode = self.Mode.start
 
+    # Both hooks are optional: a package that has nothing to do on one side of
+    # a connection does not have to define the method for it.
     def clientUpdate(self):
         for package in self.packages.values():
-            package.core.clientUpdate(self)
+            hook = getattr(package.core,"clientUpdate",None)
+            if hook != None:
+                hook(self)
+
     def serverUpdate(self):
         for package in self.packages.values():
-            package.core.serverUpdate(self)
+            hook = getattr(package.core,"serverUpdate",None)
+            if hook != None:
+                hook(self)
 
     def update(self):
         for object in list(self.sprites.values()):
-            if object.main():
+            # the walk is over a copy: something earlier this cycle may have
+            # removed this sprite already, and its id may name a replacement
+            # by now. Neither is this sprite's to update or to remove.
+            if self.sprites.get(object.id) is not object:
+                continue
+            if object.main() and self.sprites.get(object.id) is object:
                 self.removeObject(object)
         
     def clearEvents(self):
@@ -141,6 +172,12 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
         return self.getters[prefab].get(name)
 
     def addObjectByID(self, object:Runnable, id):
+        previous = self.getObject(id)
+        if previous != None and previous is not object:
+            # an id names one sprite. The one it named before is taken out
+            # properly first, or it would go on being drawn with no id left
+            # to remove it by
+            self.removeObjectByID(id)
         domainName = object.domain
         prefabName = object.prefab
         domain = self.getDomain(domainName)
@@ -148,19 +185,27 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
         exec(addFunction,globals(),locals())
         self.addObjectToGroupById(object,id,domainName)
         self.addObjectToGroupById(object,id,prefabName)
+        # drawn while it is in the world and no longer: a sprite joins the
+        # draw group here rather than when it is built, so one that is made
+        # and never added is neither drawn nor kept alive by the group
+        if isinstance(object,pygame.sprite.Sprite):
+            self.emittersManager.displayManager.add(object)
         self.addEvent(self.objectCreatedEventTemplate(id,object.module))
         
 
+    # Groups are looked up in the registry Api keeps, never by attribute name:
+    # a prefab folder called packages or network must not have sprites
+    # written into the dict of the same name the core already holds.
     def addObjectToGroupById(self,object:Runnable,id:str,groupName:str):
         # only domains that asked for a dynamic getter have a group dict, so a
         # missing one is normal and not an error
-        groupDict = getattr(self,groupName,None)
-        if isinstance(groupDict,dict):
+        groupDict = self.GroupsByNames.get(groupName)
+        if groupDict != None:
             groupDict[id] = object
 
     def removeObjectToGroupById(self,id:str,groupName:str):
-        groupDict = getattr(self,groupName,None)
-        if isinstance(groupDict,dict):
+        groupDict = self.GroupsByNames.get(groupName)
+        if groupDict != None:
             groupDict.pop(id,None)
 
     def removeObjectByID(self, id):
@@ -196,7 +241,7 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
         if not isinstance(data,dict):
             return None
         rect = data.get("rect")
-        if prefabPath == None or not isinstance(rect,dict):
+        if not isinstance(prefabPath,str) or not isinstance(rect,dict):
             return None
         if not all(key in rect for key in ("x","y","dimension")):
             return None
@@ -205,24 +250,50 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
         except (ValueError,KeyError):
             cls = None
         if cls == None:
+            # a prefab the packages no longer provide, or a domain that has no
+            # getter to find it through
+            self.raiseError("spriteNotRestored",f"{id} ({prefabPath}): no such prefab")
             return None
-        object = cls(self,(rect["x"],rect["y"],rect["dimension"]))
+        try:
+            object = cls(self,(rect["x"],rect["y"],rect["dimension"]))
+        except Exception as e:
+            # a class that can no longer be built from (core, pos) alone - it
+            # grew a required argument since the save, say - costs this
+            # sprite and nothing else. Where it failed goes in the message,
+            # so a real bug in a constructor is not mistaken for that.
+            self.raiseError("spriteNotRestored",f"{id} ({prefabPath}): {self.describeFailure(e)}")
+            return None
         self.addObjectByID(object,id)
         try:
             self.patchObject(object,data)
-        except (AttributeError,KeyError,TypeError,ValueError) as e:
+        except Exception as e:
             # the stored fields no longer fit this class: drop the sprite
             # rather than leave a half-applied one in the world
             self.removeObjectByID(id)
-            self.raiseError("spriteNotRestored",f"{id} ({prefabPath}): {e}")
+            self.raiseError("spriteNotRestored",f"{id} ({prefabPath}): {self.describeFailure(e)}")
             return None
         return object
+
+    @staticmethod
+    def describeFailure(e:Exception) -> str:
+        """The exception and the file and line it was raised at."""
+        frames = traceback.extract_tb(e.__traceback__)
+        if not frames:
+            return f"{type(e).__name__}: {e}"
+        frame = frames[-1]
+        return f"{type(e).__name__}: {e} ({frame.filename}, line {frame.lineno})"
 
     def patchObject(self,object,data:dict) -> None:
         data = dict(data)
         currentAnimation = data.pop("currentAnimation",None)
         rect = data.get("rect")
         object.fromDict(data)
+        drawIndex = getattr(object,"drawIndex",None)
+        if isinstance(drawIndex,int) and drawIndex > self.drawCounter:
+            # a saved or streamed sprite brings its place in the draw order
+            # along. Whatever is made after it comes after it, rather than
+            # taking a number that is already in use.
+            self.drawCounter = drawIndex
         if rect != None:
             # a serialized rect carries the hitbox, which sits at the sprite
             # position plus the hitbox offset; feeding it back in as the
@@ -236,8 +307,18 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
     def getWorldPath(name:str) -> str:
         return f"save/{name}"
 
-    def saveWorld(self,name:str) -> None:
+    def saveWorld(self,name:str) -> bool:
+        """Write the world to save/<name>. True once both files are on disk.
+
+        A world that cannot be written leaves the save that was there before
+        as it was and raises a worldNotSaved error: a value that does not fit
+        the file (a set in saveData, an object in saveState) makes this return
+        False, and an OSError from the disk is raised again after the error,
+        as it always was.
+        """
         folder = self.getWorldPath(name)
+        # made before the packages are asked for their state, so one that
+        # keeps files of its own beside the world has a folder to put them in
         os.makedirs(folder,exist_ok=True)
         sprites = {}
         for id,object in list(self.sprites.items()):
@@ -253,10 +334,32 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
             if saveState != None:
                 custom[packageName] = saveState(self)
         settings = {"name":name,"bannedPlayers":sorted(self.bannedPlayers),"custom":custom}
-        with open(f"{folder}/settings.yaml","w") as f:
-            yaml.safe_dump(settings,f)
-        with open(f"{folder}/sprites.json","w") as f:
-            json.dump(sprites,f)
+        # Both files are turned into text before either one is opened, so a
+        # value that cannot be stored stops the save before anything is written.
+        try:
+            texts = {"sprites.json":json.dumps(sprites),"settings.yaml":yaml.safe_dump(settings)}
+        except (TypeError,ValueError,yaml.YAMLError) as e:
+            self.raiseError("worldNotSaved",f"{name}: {e}")
+            return False
+        # Both go to temporary files first and replace the old ones only once
+        # both are written, so a full disk costs neither the copy that is
+        # already there nor the match between the two files.
+        paths = {fileName:f"{folder}/{fileName}" for fileName in texts}
+        try:
+            for fileName,text in texts.items():
+                with open(f"{paths[fileName]}.tmp","w") as f:
+                    f.write(text)
+            for path in paths.values():
+                os.replace(f"{path}.tmp",path)
+        except OSError as e:
+            for path in paths.values():
+                try:
+                    os.remove(f"{path}.tmp")
+                except OSError:
+                    pass
+            self.raiseError("worldNotSaved",f"{name}: {e}")
+            raise
+        return True
 
     def loadWorld(self,name:str) -> bool:
         folder = self.getWorldPath(name)
@@ -286,7 +389,10 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
                 skipped += 1
         if skipped:
             self.raiseError("worldPartlyLoaded",f"{skipped} sprites of {name} could not be restored")
-        self.bannedPlayers = set(settings.get("bannedPlayers",[]) or [])
+        # identities are compared as text, and a list typed in by hand may
+        # hold numbers; anything that is not a list is no ban list at all
+        banned = settings.get("bannedPlayers")
+        self.bannedPlayers = {str(player) for player in banned} if isinstance(banned,list) else set()
         custom = settings.get("custom",{})
         if not isinstance(custom,dict):
             custom = {}
@@ -322,12 +428,14 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
             self.raiseError("alreadyHosting",f"already hosting on this world")
             return False
         try:
-            self.network = network.HostNetwork(port)
+            hostNetwork = network.HostNetwork(port)
         except OSError as e:
             # port taken, or no permission to bind it: a failed listen is not
             # a reason to take the game down
             self.raiseError("hostFailed",str(e))
             return False
+        self.endNetworkSession()
+        self.network = hostNetwork
         self.clientIdentities = {}   # transport id -> stable client id
         self.clientTransports = {}   # stable client id -> transport id
         self.clientMirrors = {}      # stable client id -> last data sent per sprite
@@ -339,15 +447,34 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
 
     def join(self,ip:str,port:int,identity:str=None,password:str=None) -> bool:
         try:
-            self.network = network.ClientNetwork(ip,port)
+            clientNetwork = network.ClientNetwork(ip,port)
         except OSError as e:
             self.raiseError("connectionFailed",str(e))
             return False
+        self.endNetworkSession()
+        self.network = clientNetwork
         self.identity = identity if identity != None else uuid.uuid4().hex
         self.network.send({"type":"hello","identity":self.identity,"password":password})
         self.mode = self.Mode.join
         pygame.display.set_caption("WorldSpawn - client")
         return True
+
+    def endNetworkSession(self) -> None:
+        """Close the connection that is open, if there is one.
+
+        Hosting and joining replace each other. A host left open would keep
+        its port and its guests with nothing serving them, and their input
+        piling up in a queue nobody reads; a connection to another host would
+        keep filling one too. A host lets its guests go first, so every
+        clientConnected still meets its clientDisconnected.
+        """
+        if self.network == None:
+            return
+        if self.mode == self.Mode.host:
+            for transportID in list(self.clientIdentities):
+                self.detachClient(transportID)
+        self.network.close()
+        self.network = None
 
     def rejectClient(self,transportID:str,reason:str) -> None:
         self.network.sendTo(transportID,{"type":"rejected","reason":reason})
@@ -359,6 +486,19 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
             self.network.sendTo(transportID,{"type":"rejected","reason":"kicked"})
             self.network.dropClient(transportID)
             self.detachClient(transportID)
+            # What it said before it was cut off and nobody has read yet ends
+            # with the connection. The events name the client, not the
+            # connection, so a player who is straight back would otherwise be
+            # kicked again by a message from the one that was just closed.
+            self.dropPendingEvents(self.networkMessageEvent,clientID)
+
+    def dropPendingEvents(self,eventID:int,clientID:str) -> None:
+        """Take clientID's events of one kind out of those due next cycle."""
+        pending = self.nextEvents.get(eventID)
+        if pending:
+            pending[:] = [event for event in pending if event.clientID != clientID]
+            if not pending:
+                del self.nextEvents[eventID]
 
     def ban(self,clientID:str) -> None:
         self.bannedPlayers.add(clientID)
@@ -371,11 +511,15 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
             self.network.send(message)
         elif self.mode == self.Mode.host:
             if clientID == None:
-                self.network.broadcast(message)
+                # every client that has been let in, and nobody else: a
+                # socket that has not said hello has not given the password
+                # either
+                transportIDs = list(self.clientTransports.values())
             else:
                 transportID = self.clientTransports.get(clientID)
-                if transportID != None:
-                    self.network.sendTo(transportID,message)
+                transportIDs = [] if transportID == None else [transportID]
+            for transportID in transportIDs:
+                self.network.sendTo(transportID,message)
 
     def filterVisible(self,clientID:str,sprites:dict) -> dict:
         """Which sprites a client may see. Packages override via createFunction."""
@@ -391,6 +535,11 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
         self.clientMirrors[clientID] = {}
         self.addInputManager(clientID)
         self.network.sendTo(transportID,{"type":"welcome","clientID":clientID})
+        # A client that dropped and came straight back inside one cycle would
+        # be reported as gone and back at once, and a package that despawns on
+        # the one and spawns on the other is left holding nothing for the
+        # returning player. To the packages it never left.
+        self.dropPendingEvents(self.clientDisconnectedEvent,clientID)
         self.addEvent(self.clientConnectedEventTemplate(clientID))
 
     def detachClient(self,transportID:str) -> None:
@@ -433,6 +582,10 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
             for id in removed:
                 mirror.pop(id,None)
             for id,entry in changed.items():
+                # toDict already hands out copies of list and dict fields, so
+                # nothing in an entry changes when the sprite does. The data
+                # dict itself is shared by every client's diff this sync and
+                # gets its own copy before a mirror updates it in place.
                 if "prefabPath" in entry:
                     mirror[id] = {"prefabPath":entry["prefabPath"],"data":dict(entry["data"])}
                 else:
@@ -452,13 +605,28 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
             if object == None:
                 self.spawnFromEntry(id,prefabPath,entry["data"])
             else:
-                self.patchObject(object,entry["data"])
+                try:
+                    self.patchObject(object,entry["data"])
+                except Exception as e:
+                    # the same as a sprite that cannot be built: this one
+                    # goes, the rest of the delta still lands
+                    self.removeObjectByID(id)
+                    self.raiseError("spriteNotRestored",f"{id} ({object.prefabPath}): {self.describeFailure(e)}")
 
     def hostUpdate(self):
         while not self.network.messages.empty():
             transportID,message = self.network.messages.get()
+            # every message comes from another program, and one that does not
+            # speak this protocol must not be able to stop the host with it
+            if not isinstance(message,dict):
+                continue
             messageType = message.get("type")
             if messageType == "hello":
+                if transportID in self.clientIdentities:
+                    # one hello per connection: a second one under another
+                    # name would leave the first attached with nothing to
+                    # detach it
+                    continue
                 identity = message.get("identity")
                 clientID = str(identity) if identity != None else transportID
                 if clientID in self.bannedPlayers:
@@ -477,13 +645,14 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
                 self.detachClient(transportID)
             elif messageType == "input":
                 clientID = self.clientIdentities.get(transportID)
-                if clientID != None:
+                keys,mouse = message.get("keys"),message.get("mouse")
+                if clientID != None and validInput(keys,mouse):
                     events = inputManager.deserializeEvents(message.get("events",[]))
-                    self.setInput(clientID,events,message["keys"],message["mouse"])
+                    self.setInput(clientID,events,keys,mouse)
             elif messageType == "custom":
                 clientID = self.clientIdentities.get(transportID)
                 if clientID != None:
-                    self.addEvent(self.networkMessageEventTemplate(clientID,message["data"]))
+                    self.addEvent(self.networkMessageEventTemplate(clientID,message.get("data")))
         self.serverUpdate()
         if self.cycles % self.sendRate == 0:
             self.syncClients()
@@ -495,6 +664,7 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
         # password" with "lost connection" every time
         if not self.network.connected and self.network.messages.empty():
             self.raiseError("disconnected","lost connection to host")
+            self.network.close()
             self.network = None
             self.setStartMode()
             return
@@ -502,6 +672,13 @@ class Core(idManager.IDManager,Api,events.EventManager,errors.ErrorManager):
             message = self.network.messages.get()
             messageType = message.get("type")
             if messageType == "welcome":
+                # The host owns this world from here on and streams all of it
+                # next. Whatever this process built on its own, or kept from a
+                # session before, goes now, the way loadWorld clears before it
+                # fills: the host never names those ids, so no delta would
+                # ever take them away.
+                for id in list(self.sprites.keys()):
+                    self.removeObjectByID(id)
                 oldManager = self.inputMangers.pop(self.userID,None)
                 self.userID = message["clientID"]
                 self.inputMangers[self.userID] = oldManager if oldManager != None else inputManager.InputManager()

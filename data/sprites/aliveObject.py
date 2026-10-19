@@ -30,8 +30,11 @@ class AliveObjectData(SpriteData):
         # what makes an alive object the one it was before the save: the
         # position already travels in clientData, the rest of the state
         # does not, and a mob that comes back at full health with an empty
-        # inventory is a new mob wearing the old one's name
-        self.saveData = [key for key in ("health","inventory") if key not in self.saveData] + self.saveData
+        # inventory is a new mob wearing the old one's name. The tag is who
+        # it belongs to; without it a pet comes back a stranger to its owner.
+        # spawnedBy names which of the owner's spawners made it, so each
+        # spawner can tell its own spawns apart again after a load.
+        self.saveData = [key for key in ("tag","spawnedBy","health","inventory") if key not in self.saveData] + self.saveData
         
 class AliveObject(Sprite):
     eventRegister = events.EventRegister
@@ -60,12 +63,16 @@ class AliveObject(Sprite):
     riderDismount = eventRegister.register("riderDismount",riderDismountEventTemplate)
 
 
-    def __init__(self, core, pos: tuple[int,int,str],objectData,tag=None,dictData={}):
+    # objectData is optional, as it is on Sprite: a saved world and a host's
+    # delta rebuild every sprite with cls(core, pos), so a prefab that only
+    # overrides getDefaultData has to be buildable from that alone
+    def __init__(self, core, pos: tuple[int,int,str],objectData=None,tag=None,dictData={}):
         super().__init__(core, pos,objectData,dictData)
         self._health = 0
         self.resetModifiers()
         self.health = self.objectData.health
         self.tag = tag
+        self.spawnedBy = None
 
         self.temporaryModifiers = []
         self.allies = set()
@@ -73,6 +80,9 @@ class AliveObject(Sprite):
         self.target = None
         self.inventory = inventory.Inventory(self.objectData.inventorySize,
                                              self.objectData.inventorySize,self)
+        # the grid is built at this size directly, without going through the
+        # inventorySize setter, so the value it reads back has to be put in
+        self._inventorySize = self.objectData.inventorySize
         self.riders:set[str] = set()
         self.ride = None
         self.addIdGroup("riders",self.isRider)
@@ -86,7 +96,14 @@ class AliveObject(Sprite):
         self._target = target
 
     def hasTarget(self):
-        return self.target is not None
+        # a target that has left the world is no target, whatever still
+        # points at it: a spawner that needs one would keep spawning for
+        # something that has already died
+        target = self.target
+        if target is None:
+            return False
+        id = getattr(target,"id",None)
+        return id is None or self.core.getObject(id) is target
 
     def getDefaultData(self):
         # the art faces left, so the mirrored frame is the one facing right
@@ -161,6 +178,13 @@ class AliveObject(Sprite):
             return
         self.addEvent(self.healthChangedEventTemplate(self.id,health,self.health))
         self._health = health
+
+    def fromDict(self,data:dict) -> None:
+        # health is clamped against maxHealth, and the ceiling depends on the
+        # restored inventory and the other fields, so health goes in last
+        super().fromDict({key:value for key,value in data.items() if key != "health"})
+        if "health" in data:
+            self.health = data["health"]
 
     @ Sprite.pos.setter
     def pos(self,pos:tuple[int,int,str]) -> None:
@@ -257,7 +281,11 @@ class AliveObject(Sprite):
         self.visionRect.rect.center = self.axis
 
     def resetModifiers(self) -> None:
-        self.maxHealth: int = self.objectData.health
+        # straight to the field, not through the setter: this is the first
+        # step of a stat rebuild, and clamping health against the bare maximum
+        # here cut it down every cycle before the items that raise the ceiling
+        # had their turn. Inventory.applyModifiers clamps once it is done.
+        self._maxHealth = int(self.objectData.health)
         self.damage: int = self.objectData.damage
         self.attackCountDown = self.objectData.attackCountDown
         self.shield: float = self.objectData.shield
@@ -285,11 +313,16 @@ class AliveObject(Sprite):
                 ally = self.core.getObject(id)
                 if ally != None:
                     ally.attacker = self.attacker
-        self.health -= round(damage * (1.00 - self.shield))
+        # a share of the hit, so at most all of it: armour stacked past 1.0
+        # would turn every hit into healing
+        self.health -= round(damage * (1.00 - min(self.shield,1.0)))
         self.addEvent(self.attackEventTemplate(attackerID,self.id,self.health))
 
     def update(self) -> bool:
         super().update()
+        # riders are carried: whatever moved the mount this cycle has to move
+        # them with it, or they are left standing where they got on
+        self.UpdateRidersPos()
         # a slot emptied by spending its last item still carries the old item
         # until this runs, so anything asking the inventory what it holds
         # would keep getting the spent name back

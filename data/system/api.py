@@ -1,3 +1,4 @@
+import os
 import yaml
 from data.managers import fileManager
 from types import MethodType
@@ -7,6 +8,12 @@ class Api:
         self.domains:dict[str, "Api.Domain"] = {}
         self.packages:dict[str,"Api.Package"] = {}
         self.GroupsByBases:dict[any,dict[str,any]] = {}
+        # every dynamic group by name. The world dict the core keeps all of
+        # its objects in is one of them from the start: a domain called
+        # sprites means that same dict, where handing the core a fresh one
+        # would leave the main loop, the saves and the sync walking only the
+        # objects of that one domain
+        self.GroupsByNames:dict[str,dict[str,any]] = {"sprites":self.sprites}
         self.getters:dict[str,dict[str,any]] = {}
         self.loadPackagesIfNeeded()
 
@@ -27,12 +34,12 @@ class Api:
             if self.settings.get("create-dynamic-getter",False):
                 for prefab in package.getPrefabs(self.name):
                     base = fileManager.getModule(f"{package.path}/{self.name}/{prefab}","base")
-                    self.api.addGroup(prefab,base)
+                    self.api.addGroup(prefab,base,f"{package.path}/{self.name}/{prefab}")
 
         def createDynamicGetters(self):
             if self.settings.get("create-dynamic-getter",False):
                 base = fileManager.getModule(f"{self.package.path}/{self.name}","base")
-                self.api.addGroup(self.name,base)
+                self.api.addGroup(self.name,base,f"{self.package.path}/{self.name}")
 
         @ staticmethod
         def buildStaticGetter(objName:str):
@@ -55,7 +62,15 @@ class Api:
                     # package wins and may specialise inherited content
                     objects = loadedObjects | objects
                     self.api.getters[objName] = objects
-                    self.api.createFunction(f"get{objName.capitalize()}",self.buildStaticGetter(objName))
+                    getterName = f"get{objName.capitalize()}"
+                    if hasattr(type(self.api),getterName):
+                        # a method the core already has - a folder called
+                        # object would replace getObject and every lookup by
+                        # id with it. The prefabs still load by prefabPath.
+                        self.api.raiseError("getterNameTaken",
+                            f"{path}: core.{getterName} already exists, so this folder gets no getter; rename it")
+                        continue
+                    self.api.createFunction(getterName,self.buildStaticGetter(objName))
                 
 
         def load(self):
@@ -75,7 +90,7 @@ class Api:
             self.api.addDomain(domain)
 
         def loadDependencies(self):
-            for package in self.settings["dependencies"]:
+            for package in self.settings.get("dependencies") or []:
                 if not self.api.isPackageLoaded(package):
                     self.api.loadPackage(package)
 
@@ -88,6 +103,11 @@ class Api:
             self.loadCoreExtension()
 
         def loadCoreExtension(self):
+            # a package of content alone has nothing to graft onto the core,
+            # and the hooks the core looks up on it are all optional
+            self.core = None
+            if not os.path.isfile(self.path+"/core.py"):
+                return
             self.core = fileManager.getModule(self.path,"core")
             self.api.addToBase(self.core)
 
@@ -95,8 +115,11 @@ class Api:
             return fileManager.getFolders(self.path+f"/{domain}",fullPath)
 
         def getTypeSettings(self) -> dict:
+            if not os.path.isfile(self.path+"/domains.yaml"):
+                return {}
             with open(self.path+"/domains.yaml") as f:
-                domains = yaml.safe_load(f)
+                # a package that adds no domains may leave the file empty
+                domains = yaml.safe_load(f) or {}
                 return domains
 
         def loadNewDomains(self):
@@ -105,8 +128,12 @@ class Api:
                 self.createDomain(domain,domainsSettings[domain])
 
         def loadDomains(self):
-            usedDomains = self.settings["used-domains"]
+            usedDomains = self.settings.get("used-domains") or []
             for domainName in usedDomains:
+                if domainName not in self.api.domains:
+                    self.api.raiseError("domainNotFound",
+                        f"{self.path}: uses the domain {domainName}, which neither it nor its dependencies declare")
+                    continue
                 domain = self.api.getDomain(domainName)
                 domain.loadPackage(self)
 
@@ -116,9 +143,21 @@ class Api:
             return self.settings["name"]
 
 
-    def addGroup(self,name,cls):
-        group = {}
-        setattr(self,name,group)
+    def addGroup(self,name,cls,source=None):
+        group = self.GroupsByNames.get(name)
+        if group == None:
+            group = {}
+            self.GroupsByNames[name] = group
+            if hasattr(self,name):
+                # core.host, core.packages, core.network: a group set over one
+                # of those breaks the engine far from the folder that did it
+                self.raiseError("groupNameTaken",
+                    f"{source or name}: core.{name} already exists, so this group is not reachable as core.{name}; rename the folder")
+            else:
+                setattr(self,name,group)
+        # a package that fills a domain or a prefab folder another one
+        # already declared adds to the group that is there. A fresh dict would
+        # drop everything put in it so far out of core.<name>.
         self.GroupsByBases[cls] = group
 
     def addDomain(self,domain):
@@ -139,7 +178,7 @@ class Api:
     @ staticmethod
     def getPackageSettings(name:str) -> dict:
         with open(f"{Api.getPackagePathByName(name)}/settings.yaml") as f:
-            settings = yaml.safe_load(f)
+            settings = yaml.safe_load(f) or {}
             return settings
 
     def isPackageLoaded(self,name:str) -> bool:
@@ -147,17 +186,45 @@ class Api:
 
     def loadPackage(self,name:str) -> None:
         settings = self.getPackageSettings(name)
+        if settings.get("name") != name:
+            # the folder is what the engine imports from and the name is what
+            # everything else calls it by, so the two have to agree
+            self.raiseError("packageNotLoaded",
+                f"packages/{name}: settings.yaml names it {settings.get('name')!r}; a package has to be named after its folder")
+            return
+        missing = [dependency for dependency in settings.get("dependencies") or []
+                   if not self.isPackageLoaded(dependency)
+                   and not os.path.isfile(f"{self.getPackagePathByName(dependency)}/settings.yaml")]
+        if missing:
+            # without what it builds on the package would fail halfway through
+            # loading, after grafting part of itself onto the core
+            self.raiseError("packageNotLoaded",
+                f"packages/{name}: needs {', '.join(missing)}, which is not in packages/")
+            return
         self.packages[name] = self.Package(settings,self)
 
     def getDomain(self,domain):
         return self.domains[domain]
 
     def loadPackagesIfNeeded(self) -> None:
-        packages = fileManager.getFolders("packages")
-        packagesSettings = [self.getPackageSettings(package) for package in packages]
-        for settings in packagesSettings:
+        if os.path.isdir("packages"):
+            for folder in sorted(os.listdir("packages")):
+                # only letters and digits make a package folder; anything else
+                # that carries a settings.yaml is a package left out, and the
+                # author ought to hear about it rather than see nothing
+                if not fileManager.validName(folder) and os.path.isfile(f"packages/{folder}/settings.yaml"):
+                    self.raiseError("packageNotLoaded",
+                        f"packages/{folder}: a package folder name may only hold letters and digits")
+        for folder in fileManager.getFolders("packages"):
+            # a folder without settings is not a package, just something
+            # sitting next to them
+            if not os.path.isfile(f"packages/{folder}/settings.yaml"):
+                continue
+            settings = self.getPackageSettings(folder)
             # a package pulled in as somebody else's dependency is already
             # loaded; loading it again would re-run its core extension and
-            # let it overwrite content the package that depends on it added
-            if settings["always-enabled"] and not self.isPackageLoaded(settings["name"]):
-                self.loadPackage(settings["name"])
+            # let it overwrite content the package that depends on it added.
+            # One that does not say otherwise loads, as everything sitting in
+            # packages/ is meant to.
+            if settings.get("always-enabled",True) and not self.isPackageLoaded(folder):
+                self.loadPackage(folder)

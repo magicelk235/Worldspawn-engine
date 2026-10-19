@@ -48,7 +48,9 @@ def deserializeEvents(payload) -> list[pygame.event.Event]:
     for entry in payload:
         if not isinstance(entry,dict):
             continue
-        fields = WIRE_EVENTS.get(entry.get("type"))
+        entryType = entry.get("type")
+        # the type comes from another program: anything but a number is no event
+        fields = WIRE_EVENTS.get(entryType) if type(entryType) == int else None
         if fields == None:
             continue
         attrs = {}
@@ -62,7 +64,7 @@ def deserializeEvents(payload) -> list[pygame.event.Event]:
                 attrs[field] = bool(value)
             else:
                 attrs[field] = value if type(value) == int else 0
-        events.append(pygame.event.Event(entry["type"],attrs))
+        events.append(pygame.event.Event(entryType,attrs))
     return events
 
 class InputManager(EventManager):

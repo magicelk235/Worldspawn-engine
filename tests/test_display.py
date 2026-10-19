@@ -122,10 +122,12 @@ assert positions["tree"] < positions["walker"], \
 # --- UI is screen space ----------------------------------------------------
 
 # a bare UIObject has no package domain to be registered under, and the draw
-# path only needs it in the display group, which Sprite.__init__ does
+# path only needs it in the display group, which the core would otherwise do
+# when the sprite is added to the world
 def widget(pos, viewers, id):
     object = uiObject.UIObject(core, pos, None, viewers, viewers)
     object.id = id
+    display.add(object)
     return object
 
 
@@ -209,5 +211,32 @@ assert Image.measure(ImageData(text="4242", fontSize=-1)) == \
 # measure the render, or the box misses the text by a couple of pixels.
 assert builtIn.render("4242", 12).get_size() != builtIn.size("4242", 12), \
     "if these ever agree the warning above can go"
+
+# A field can follow one of its owner's attributes with "@name". The fields a
+# picture is drawn with always did, but a text or a path that followed one
+# kept the frames it was first loaded with, and cached them under the new key.
+from data.common.attributeAccessor import AttributeAccessor
+
+
+class Scoreboard(AttributeAccessor):
+    score = "1"
+
+
+board = Scoreboard()
+score = Image(ImageData(text="@score"), board)
+assert score.size == builtIn.render("1").get_size()
+board.score = "12345"
+assert score.size == builtIn.render("12345").get_size(), \
+    "a text that follows an attribute has to show what the attribute says now"
+
+# --- a widget's players can leave -------------------------------------------
+
+# a client that disconnects loses its input manager at once, while the
+# widgets it could click only hear about it on a later cycle; asking one of
+# them for its players' input used to raise for the one who left
+core.addInputManager("guest")
+shared = widget((10, 10, "word"), {"main", "guest"}, "sharedWidget")
+core.inputMangers.pop("guest")
+assert shared.getInputList() == [core.getInputManager("main")], shared.getInputList()
 
 print("display OK", flush=True)

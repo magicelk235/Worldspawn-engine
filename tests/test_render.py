@@ -34,6 +34,19 @@ assert "far" not in drawn, "offscreen sprite should be culled"
 assert "other" not in drawn, "other-dimension sprite should be culled"
 assert "hidden" not in drawn, "hidden sprite should not be drawn"
 
+# Drawing follows world membership. A sprite used to join the draw group the
+# moment it was built, so one that was made and never added - a preview, a
+# spawn that got called off - was drawn every frame and never let go of.
+display = core.emittersManager.displayManager
+unadded = core.getGroup1("object1")(core,(14,14,"word"))
+gone = core.getGroup1("object1")(core,(16,16,"word"))
+core.addObjectByID(gone,"gone")
+assert gone in display.sprites(), "a sprite added to the world has to be drawn"
+core.removeObjectByID("gone")
+assert unadded not in display.sprites(), "a sprite that was never added is in the draw group"
+assert gone not in display.sprites(), "a removed sprite is still in the draw group"
+assert set(display.sprites()) == set(core.sprites.values()), "the draw group has to be the world"
+
 # Depth in the y sorted band goes by the middle of the hitbox. The original
 # sorted on the middle of the image, so this is a deliberate change: a tree is
 # a tall texture with a short hitbox at its foot, and sorting it by the middle

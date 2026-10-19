@@ -21,6 +21,12 @@ class EventRegister:
 
     @classmethod
     def register(cls, name,createFunction):
+        # A name is one event. Registering it again used to hand out a second
+        # id under it: everything that looks the event up by name moved to the
+        # new id, while whatever had kept the first - the timer the main loop
+        # ticks on, the error lists - stopped hearing it.
+        if name in EventRegister.registeredEvents:
+            raise ValueError(f"an event named {name!r} is already registered; pick another name")
         id = EventRegister.nextID
         EventRegister.nextID += 1
         EventRegister.registeredEvents[name] = RegisteredEvent(id,createFunction)

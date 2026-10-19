@@ -3,8 +3,9 @@ def toModuleSyntax(path):
     return path.replace("/",".")
 
 def validPath(path):
-    name = str(path)
-    name = name.split("/")[-1]
+    # Windows lists its folders with backslashes, and splitting on "/" alone
+    # would hand the whole path to the name check, which no package passes
+    name = str(path).replace("\\","/").split("/")[-1]
     return validName(name)
     
 def validName(name):
@@ -19,7 +20,13 @@ def removeFullPath(extension,path):
 
 def getFolders(path,fullPath=False):
     pathObj = pathlib.Path(path)
-    folders = [str(p).replace("\\","/") for p in pathObj.iterdir() if (p.is_dir() and validPath(p))]
+    if not pathObj.is_dir():
+        # a fresh clone has no packages/ folder at all, and that only means
+        # there is nothing to load
+        return []
+    # sorted, so packages that do not depend on each other load in the same
+    # order on every machine and the same one wins a name they both define
+    folders = sorted(str(p).replace("\\","/") for p in pathObj.iterdir() if (p.is_dir() and validPath(p)))
     if fullPath:
         return folders
     else:
@@ -31,7 +38,9 @@ def getFiles(path,removeEnd=False,fullPath=False,extensions=None):
     removeEnd drops the extension, and only the extension: cutting at the
     first dot breaks on any folder above the package that has one in its
     name. extensions filters, so a stray .DS_Store next to the sources is
-    not mistaken for content.
+    not mistaken for content. Dunder files such as __init__.py are left out
+    the way __pycache__ is left out of getFolders: they make a folder a
+    Python package, they are not content, and they have no getObject.
     """
     pathObj = pathlib.Path(path)
     files = []
@@ -39,6 +48,8 @@ def getFiles(path,removeEnd=False,fullPath=False,extensions=None):
         if not p.is_file():
             continue
         if extensions != None and p.suffix.lower() not in extensions:
+            continue
+        if p.stem.startswith("__"):
             continue
         name = str(p).replace("\\","/")
         if removeEnd:

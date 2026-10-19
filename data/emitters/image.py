@@ -48,6 +48,8 @@ class Image(AttributeAccessor):
 	_cacheLimit = 2048
 	_keyFields = ("path","text","fontSize","scaleSize","cutSize","flipX","flipY",
 				  "color","angle","factoredSize")
+	# the fields the frames themselves are made from, rather than drawn with
+	_sourceFields = ("path","text","fontSize")
 	def __init__(self,imageData:ImageData,owner=None):
 		self.oldPath:str = None
 		self.textMode:bool = False
@@ -77,7 +79,13 @@ class Image(AttributeAccessor):
 		self.imageData = imageData
 		self.loadImage()
 
-	def resolveDynamicFields(self):
+	def resolveDynamicFields(self) -> bool:
+		"""Point every "@name" field at the owner's current value.
+
+		Returns whether one of the fields the frames are made from moved,
+		because then the frames in hand are the old picture.
+		"""
+		moved = False
 		for key,value in self.imageData.__dict__.items():
 			if type(value) != str or not value.startswith("@"):
 				continue
@@ -89,7 +97,11 @@ class Image(AttributeAccessor):
 				fields = type(self.imageData).__dataclass_fields__
 				self.setAttr(key,fields[key].default)
 			else:
-				self.setAttr(key,self.owner.getAttr(value[1:]))
+				resolved = self.owner.getAttr(value[1:])
+				if key in self._sourceFields and resolved != getattr(self,key):
+					moved = True
+				self.setAttr(key,resolved)
+		return moved
 
 	def toDict(self):
 		data = self.imageData.toDict()
@@ -140,7 +152,11 @@ class Image(AttributeAccessor):
 		return offset
 
 	def getRawImage(self):
-		self.resolveDynamicFields()
+		if self.resolveDynamicFields():
+			# a path or a text that follows an attribute, and the attribute
+			# changed: rebuild, or the old picture gets cached under the new
+			# key and shown from then on
+			self.loadImage()
 		cache = Image._cache
 		key = self.cacheKey()
 		frame = cache.pop(key,None)

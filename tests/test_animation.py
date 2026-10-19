@@ -37,6 +37,17 @@ for _ in range(20):
 assert advanced, "gif frame should advance over time"
 assert player.image.getRawImage() is not firstSurface, "raw image cache should key per frame"
 
+# Pausing a sprite means stopping its timers and resuming means starting them
+# again. A looping animation has no countdown at all (-1), and starting one
+# used to read as a timer that ran out a cycle ago, so resuming switched the
+# animation to whatever came next.
+timer = player.getTimer("animation")
+timer.stop()
+timer.start()
+player.updateAnimations()
+assert player.currentAnimation == "anim", \
+    f"resuming a looping animation switched it to {player.currentAnimation}"
+
 player.setAnimation("default")
 assert player.currentAnimation == "default"
 print("animation OK")

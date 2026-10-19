@@ -19,11 +19,28 @@ class Sendable:
         data = {}
         for key in keys:
             obj = self.getAttr(key)
-            if self.isMutable(obj):
+            if isinstance(obj,Sendable):
+                # copied already, by the same rule
                 data[key] = obj.toDict()
-            else:
-                data[key] = obj
+                continue
+            if self.isMutable(obj):
+                # any other toDict may still hand out its own live lists
+                obj = obj.toDict()
+            data[key] = self.snapshot(obj)
         return data
+
+    @staticmethod
+    def snapshot(obj):
+        # what this hands out is kept as the host's record of what a client
+        # was sent and diffed against on the next sync. A list or dict passed
+        # along as itself is still the live one, so a change made to it in
+        # place lands on both sides of that diff and never reaches anyone.
+        # This is the one copy made of it; the record keeps it as it is.
+        if isinstance(obj,list):
+            return [Sendable.snapshot(value) for value in obj]
+        if isinstance(obj,dict):
+            return {key:Sendable.snapshot(value) for key,value in obj.items()}
+        return obj
     @staticmethod
     def isMutable(obj):
         return hasattr(obj,"toDict")

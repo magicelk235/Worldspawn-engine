@@ -72,8 +72,10 @@ class Timer:
 
     def start(self):
         # resume: the time that was left when it stopped is the time it has
-        # left now, and the nominal countdown is untouched
-        if self.stopped:
+        # left now, and the nominal countdown is untouched. A countdown of -1
+        # never had any time to resume; starting it would read as a timer
+        # that ran out a cycle ago and fire it.
+        if self.stopped and self.countDown != -1:
             self.stopped = False
             self.endCycle = self.currentCycle() + (self.endCycle - self.stoppedCycle)
             self.stoppedCycle = 0

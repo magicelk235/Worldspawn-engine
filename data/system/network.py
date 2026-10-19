@@ -1,6 +1,12 @@
 import json, socket, struct, threading, queue
 
 MAX_MESSAGE_SIZE = 16 * 1024 * 1024  # refuse absurd length prefixes from bad peers
+# how much may be waiting to go out to one peer before it counts as gone:
+# room for a message of the largest size and as much again
+MAX_BACKLOG = 2 * MAX_MESSAGE_SIZE
+# how long a dropped peer gets to take what was still queued for it - the
+# reason it was kicked, say - before its socket is closed regardless
+DROP_GRACE = 5.0
 
 def closeSocket(sock):
     # shutdown wakes any thread blocked in recv and pushes the FIN out
@@ -14,9 +20,9 @@ def closeSocket(sock):
     except OSError:
         pass
 
-def sendMessage(sock, data) -> None:
+def encodeMessage(data) -> bytes:
     payload = json.dumps(data).encode()
-    sock.sendall(struct.pack(">I", len(payload)) + payload)
+    return struct.pack(">I", len(payload)) + payload
 
 def recvall(sock, n):
     data = bytearray()
@@ -39,6 +45,65 @@ def receiveMessage(sock):
         return None
     return json.loads(raw.decode())
 
+class Sender:
+    """The outgoing half of one connection, written out on a thread of its own.
+
+    A peer that stops reading - a laptop shut mid-game, a window held still -
+    fills the socket's buffers, and a send made from the game loop then waits
+    for it, with everybody else's game waiting too. Messages queue here
+    instead, and a peer that falls MAX_BACKLOG behind is cut off rather than
+    waited for.
+    """
+    def __init__(self, sock):
+        self.sock = sock
+        self.queue = queue.Queue()
+        self.backlog = 0
+        self.lock = threading.Lock()
+        self.timer = None    # the DROP_GRACE deadline, once finish() has run
+        self.done = False    # the writer has stopped and closed the socket
+        threading.Thread(target=self.writeLoop, daemon=True).start()
+
+    def send(self, payload:bytes) -> bool:
+        """Queue one encoded message; False when the peer is too far behind."""
+        with self.lock:
+            if self.backlog + len(payload) > MAX_BACKLOG:
+                return False
+            self.backlog += len(payload)
+        self.queue.put(payload)
+        return True
+
+    def finish(self) -> None:
+        """Close once what is queued has gone out, or after DROP_GRACE at most.
+
+        Safe to call more than once, and after the writer has already stopped.
+        """
+        with self.lock:
+            if self.done or self.timer != None:
+                return
+            self.timer = threading.Timer(DROP_GRACE, closeSocket, args=(self.sock,))
+        self.timer.daemon = True
+        self.timer.start()
+        self.queue.put(None)
+
+    def writeLoop(self):
+        while True:
+            payload = self.queue.get()
+            if payload == None:
+                break
+            try:
+                self.sock.sendall(payload)
+            except OSError:
+                break
+            with self.lock:
+                self.backlog -= len(payload)
+        # also wakes the reader, which is what reports the peer gone
+        closeSocket(self.sock)
+        with self.lock:
+            self.done = True
+            timer = self.timer
+        if timer != None:
+            timer.cancel()
+
 class HostNetwork:
     def __init__(self, port:int):
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -46,6 +111,7 @@ class HostNetwork:
         self.server.bind(("", port))
         self.server.listen()
         self.clients:dict[str,socket.socket] = {}
+        self.senders:dict[str,Sender] = {}
         self.messages = queue.Queue()
         self.nextClient = 0
         self.lock = threading.Lock()
@@ -61,6 +127,7 @@ class HostNetwork:
                 clientID = f"client{self.nextClient}"
                 self.nextClient += 1
                 self.clients[clientID] = sock
+                self.senders[clientID] = Sender(sock)
             self.messages.put((clientID, {"type": "connected"}))
             threading.Thread(target=self.readLoop, args=(clientID, sock), daemon=True).start()
 
@@ -78,19 +145,23 @@ class HostNetwork:
 
     def dropClient(self, clientID):
         with self.lock:
-            sock = self.clients.pop(clientID, None)
-        if sock != None:
-            closeSocket(sock)
+            self.clients.pop(clientID, None)
+            sender = self.senders.pop(clientID, None)
+        if sender != None:
+            # what was queued before still goes out, so a refused join or a
+            # kick arrives with its reason, and then the socket closes
+            sender.finish()
 
     def sendTo(self, clientID, data):
         with self.lock:
-            sock = self.clients.get(clientID)
-        if sock != None:
-            try:
-                sendMessage(sock, data)
-            except OSError:
-                self.dropClient(clientID)
-                self.messages.put((clientID, {"type": "disconnected"}))
+            sender = self.senders.get(clientID)
+        if sender == None:
+            return
+        if not sender.send(encodeMessage(data)):
+            # it has stopped reading: that costs this client its connection,
+            # not everybody else their game
+            self.dropClient(clientID)
+            self.messages.put((clientID, {"type": "disconnected"}))
 
     def broadcast(self, data):
         with self.lock:
@@ -104,10 +175,11 @@ class HostNetwork:
         except OSError:
             pass
         with self.lock:
-            socks = list(self.clients.values())
+            senders = list(self.senders.values())
             self.clients.clear()
-        for sock in socks:
-            closeSocket(sock)
+            self.senders.clear()
+        for sender in senders:
+            sender.finish()
 
 class ClientNetwork:
     def __init__(self, ip:str, port:int):
@@ -115,6 +187,7 @@ class ClientNetwork:
         self.sock.settimeout(None)
         self.messages = queue.Queue()
         self.connected = True
+        self.sender = Sender(self.sock)
         threading.Thread(target=self.readLoop, daemon=True).start()
 
     def readLoop(self):
@@ -125,15 +198,19 @@ class ClientNetwork:
                 message = None
             if message == None:
                 self.connected = False
+                # the writer would otherwise wait on its queue forever and
+                # keep the socket open with it
+                self.sender.finish()
                 return
             self.messages.put(message)
 
     def send(self, data):
-        try:
-            sendMessage(self.sock, data)
-        except OSError:
-            self.connected = False
+        if not self.sender.send(encodeMessage(data)):
+            # a host that has stopped reading is as good as gone
+            self.close()
 
     def close(self):
-        closeSocket(self.sock)
+        # what was sent just before still goes out, as it does for a peer the
+        # host drops
+        self.sender.finish()
         self.connected = False

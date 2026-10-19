@@ -77,7 +77,10 @@ class SpriteData:
     displayByDirectionY:bool = False
 
     def __post_init__(self):
-        self.clientData=["rect","currentAnimation","drawIndex"]+self.clientData
+        # visible travels with the rest of what decides the picture: a client
+        # or a loaded world rebuilds the sprite through __init__, which starts
+        # it shown, and a hidden one would come back drawn
+        self.clientData=["rect","currentAnimation","drawIndex","visible"]+self.clientData
 
 
 class Sprite(spatial.Spatial,pygame.sprite.Sprite,sendable.Sendable):
@@ -112,7 +115,10 @@ class Sprite(spatial.Spatial,pygame.sprite.Sprite,sendable.Sendable):
         # drawn without a place in the order
         self.drawIndex:int = core.nextDrawIndex()
         spatial.Spatial.__init__(self,core,pos)
-        pygame.sprite.Sprite.__init__(self,core.emittersManager.displayManager)
+        # no draw group yet: the core puts a sprite in it when the sprite is
+        # added to the world and takes it out again when it is removed, so
+        # one that is built and never added is neither drawn nor kept alive
+        pygame.sprite.Sprite.__init__(self)
         self.directionX:"Sprite.DirectionX" = self.DirectionX.left
         self.directionY:"Sprite.DirectionY" = self.DirectionY.top
         self.addTimer("animation",repeat=True)

@@ -139,7 +139,9 @@ class Inventory:
 		# world, a client delta or a grid that shrank can all offer a cell
 		# past the edge, and every read of the hand goes through getItem
 		w,h = self.size
-		self._handPos = (min(max(int(value[0]),0),w-1),min(max(int(value[1]),0),h-1))
+		# a grid with no cells still gets a hand at (0,0); getHandItem stands
+		# in an empty slot for it rather than reading a cell that is not there
+		self._handPos = (min(max(int(value[0]),0),max(w-1,0)),min(max(int(value[1]),0),max(h-1,0)))
 
 
 	@ property
@@ -190,6 +192,10 @@ class Inventory:
 		return self.size[0]
 
 	def getHandItem(self):
+		# an owner that carries nothing (inventorySize 0) has no cell to hold,
+		# and the hand is read on every stat rebuild
+		if self.getW() <= 0 or self.getH() <= 0:
+			return InventoryItem(self.owner.core.getItems("none")(),0)
 		return self.getItem(*self.handPos)
 
 	def getItemByName(self, name):
@@ -216,20 +222,42 @@ class Inventory:
 		return self.addItem(InventoryItem(item,count))
 
 	def addItem(self, item):
-		for h in range(self.getH()):
-			for w in range(self.getW()):
-				if self.getItem(w,h).sameItemType(item):
-					if self.getItem(w,h).addCount(item.getCount()):
-						self.applyModifiers()
-						return True
-		for h in range(self.getH()):
-			for w in range(self.getW()):
-				if self.getItem(w,h).isEmpty():
-					self.getItem(w,h).copy(item)
+		"""Put a whole stack in, or none of it.
 
-					self.applyModifiers()
-					return True
-		return False
+		It goes on top of a stack of the same item if it fits there whole,
+		then into one empty slot if it fits under the item's max. Anything
+		bigger is spread out: the started stacks are topped up and the rest
+		is split over empty slots, never past the max, and only once the
+		whole count is known to fit.
+		"""
+		slots = self.toRawList()
+		count = item.getCount()
+		for slot in slots:
+			if slot.sameItemType(item) and slot.addCount(count):
+				self.applyModifiers()
+				return True
+		limit = item.getMax()
+		empty = [slot for slot in slots if slot.isEmpty()]
+		if count <= limit and empty:
+			empty[0].copy(item)
+			self.applyModifiers()
+			return True
+		started = [slot for slot in slots if slot.sameItemType(item) and not slot.isEmpty()]
+		room = sum(max(limit-slot.getCount(),0) for slot in started) + limit*len(empty)
+		if limit <= 0 or count > room:
+			return False
+		for slot in started:
+			moved = min(max(limit-slot.getCount(),0),count)
+			slot.setCount(slot.getCount()+moved)
+			count -= moved
+		for slot in empty:
+			if count <= 0:
+				break
+			slot.item = item.getItem()
+			slot.count = min(limit,count)
+			count -= slot.count
+		self.applyModifiers()
+		return True
 
 	def removeItemByAmount(self, name, count):
 		for h in range(self.getH()):
@@ -261,7 +289,8 @@ class Inventory:
 		return False
 
 	def hasItemInHand(self, name, count=-1):
-		return self.hasItemAt(*self.handPos,name,count)
+		item = self.getHandItem()
+		return item.sameName(name) and (count == -1 or item.canDecCount(count))
 
 	def update(self):
 		self.applyModifiers()
@@ -303,8 +332,11 @@ class Inventory:
 	def applyModifiers(self):
 		self.dropSpentStacks()
 		self.owner.resetModifiers()
-		self.getHandItem().applyModifiers(self.owner,True)
-		usedNames = set()
+		hand = self.getHandItem()
+		hand.applyModifiers(self.owner,True)
+		# the held item has already had its say, the modifiers that work from
+		# any slot included, so walking past it again would count those twice
+		usedNames = {hand.getItemName()}
 		for row in self.inventory:
 			for item in row:
 				if item.getItemName() not in usedNames:
@@ -313,6 +345,11 @@ class Inventory:
 		# timed effects go on top of the items, the way legacy ordered it:
 		# an item that sets a stat outright must not wipe a live effect
 		self.owner.applyTimedModifiers()
+		# the reset puts the base maximum back without cutting health down to
+		# it, since the items may be about to raise it again; health is held
+		# to the maximum the rebuild settled on instead
+		if hasattr(self.owner,"health"):
+			self.owner.health = self.owner.health
 
 
 	# interaction

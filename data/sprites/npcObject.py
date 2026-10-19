@@ -43,7 +43,19 @@ class Spawner:
 			setattr(npcObject,self.setName,set())
 			# an id group check is called with the id and nothing else
 			npcObject.addIdGroup(self.setName,
-								 lambda id,owner=npcObject: id in getattr(owner,self.setName))
+								 lambda id,owner=npcObject: self.isSpawn(owner,id))
+
+	def isSpawn(self,npcObject:"NpcObject",id:str) -> bool:
+		if id in getattr(npcObject,self.setName):
+			return True
+		# the set is not saved, so after a load it starts out empty while what
+		# this spawner made is back in the world. Each spawn carries its
+		# owner's tag and the index of the spawner that made it, and counting
+		# those keeps the limit a limit instead of topping the world up again
+		# on every load, without one spawner counting another's spawns.
+		other = npcObject.core.getObject(id)
+		return (other != None and getattr(other,"tag",None) == npcObject.id
+				and getattr(other,"spawnedBy",None) == self.index)
 
 	def getSpawnedCount(self,npcObject:"NpcObject"):
 		return len(getattr(npcObject,self.setName))
@@ -65,6 +77,7 @@ class Spawner:
 		if cls == None:
 			return
 		spawned = cls(core=npcObject.core,pos=pos,tag=npcObject.id,**self.initData)
+		spawned.spawnedBy = self.index
 		# nothing exists in the world until the core hands it an id
 		id = npcObject.core.addObject(spawned)
 		getattr(npcObject,self.setName).add(id)
@@ -87,7 +100,9 @@ class NpcObjectData(aliveObject.AliveObjectData):
 	spawners:list = field(default_factory=list)
 
 class NpcObject(aliveObject.AliveObject):
-	def __init__(self, core, pos: tuple[int,int,str],objectData,tag=None,dictData={}):
+	# optional for the same reason as on AliveObject: saves, deltas and the
+	# spawners above all build with cls(core, pos, ...) and no data
+	def __init__(self, core, pos: tuple[int,int,str],objectData=None,tag=None,dictData={}):
 		super().__init__(core, pos, objectData, tag, dictData)
 		for lootable in self.objectData.lootableList:
 			lootable.generateItem(self.inventory,self.core)

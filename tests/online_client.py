@@ -75,7 +75,14 @@ waitFor(lambda: core.getObject("testclient-mark") == None,
 
 # reconnect: same identity resumes the same player after a drop
 core.network.close()
+stale = core.getObject("testclient")
 assert core.join("127.0.0.1", 5599, identity="testclient", password="hunter2")
+# once the host welcomes us back the world is its own again: the copy kept
+# from the dropped session goes and the player comes back as the host has it
+def welcomedBack():
+    player = core.getObject("testclient")
+    return player is not None and player is not stale
+waitFor(welcomedBack, "the host should stream our player back after reconnecting")
 startX = core.getObject("testclient").rect.x
 localInput = core.getInputManager("testclient")
 waitFor(lambda: core.getObject("testclient").rect.x > startX,
