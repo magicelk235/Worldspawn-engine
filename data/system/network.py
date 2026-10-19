@@ -170,10 +170,9 @@ class HostNetwork:
             self.sendTo(clientID, data)
 
     def close(self):
-        try:
-            self.server.close()
-        except OSError:
-            pass
+        # on Linux closing a listening socket does not wake the thread
+        # blocked in accept on it; shutting it down first does
+        closeSocket(self.server)
         with self.lock:
             senders = list(self.senders.values())
             self.clients.clear()

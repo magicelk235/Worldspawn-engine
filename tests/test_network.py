@@ -82,7 +82,7 @@ stalled.close()
 
 # A client whose host goes away stops its writer and closes its socket; left
 # waiting on its queue, the writer kept both for as long as the program ran.
-baseline = threading.active_count()
+baseline = set(threading.enumerate())
 clients = []
 for _ in range(3):
     leaving = HostNetwork(0)
@@ -95,11 +95,13 @@ for _ in range(3):
     assert not client.connected, "the client never noticed its host was gone"
     clients.append(client)
 deadline = time.time() + 5
-while (threading.active_count() > baseline or any(client.sock.fileno() != -1 for client in clients)) \
+def leftover():
+    return [thread for thread in threading.enumerate() if thread not in baseline]
+
+while (leftover() or any(client.sock.fileno() != -1 for client in clients)) \
         and time.time() < deadline:
     time.sleep(0.02)
-assert threading.active_count() <= baseline, \
-    f"a client left threads behind: {threading.active_count()} running, {baseline} before"
+assert not leftover(), f"threads left behind: {[thread.name for thread in leftover()]}"
 assert all(client.sock.fileno() == -1 for client in clients), "a client kept its socket open"
 
 print("network OK")
