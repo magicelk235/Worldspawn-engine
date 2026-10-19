@@ -32,7 +32,9 @@ Identity is a string you pass to `join`. It becomes the client id and survives r
 
 ## Packages
 
-Game content lives in `packages/<name>/` with three parts: `settings.yaml` (name, dependencies, used domains), `domains.yaml` (which sprite groups exist), and `core.py`, a class that gets grafted onto the engine core. That class can define lifecycle hooks (`serverUpdate`, `clientUpdate`, `saveState`, `loadState`) and react to events like `clientConnected` or `networkMessage`. A package that lists another in `dependencies` loads after it and may override the content it registers, so a game can specialise what the package it builds on provides.
+Game content lives in `packages/<name>/`: a `settings.yaml` with the package's name and dependencies, an optional `domains.yaml` declaring which sprite groups exist, and an optional `core.py` holding a class that gets grafted onto the engine core. That class can define lifecycle hooks (`serverUpdate`, `clientUpdate`, `saveState`, `loadState`) and react to events like `clientConnected` or `networkMessage`. A package that lists another in `dependencies` loads after it, and the prefabs it registers under the same name replace the ones the dependency provided.
+
+[docs/packages.md](docs/packages.md) covers writing a package from start to finish: the file layout, sprites, assets, timers, input, events, saving and online play, ending with a small game you can copy and run.
 
 Nothing is committed under `packages/`, because anything sitting there loads into every world. The small example the checks run against lives in `tests/fixtures/package` and is copied into a temporary root for the duration of a check.
 
